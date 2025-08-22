@@ -193,7 +193,8 @@ fn main() {
                         args.extensions.contains(&ext.to_string_lossy().to_string())
                     });
                     let mut tile_set = TileSet::<()>::new();
-                    let extensions : HashSet<String> = args.extensions.iter().map(|x| x.to_owned()).collect();
+                    let extensions: HashSet<String> =
+                        args.extensions.iter().map(|x| x.to_owned()).collect();
                     for path_buf in images.unwrap() {
                         if let Some(ext) = path_buf.extension() {
                             if extensions.contains(ext.to_str().unwrap()) && path_buf.exists() {
@@ -204,7 +205,8 @@ fn main() {
                     eprintln!("Tile set with {} tiles", tile_set.len());
                     Ok(render_random(&img, tile_set, tile_size))
                 }
-            }.unwrap();
+            }
+            .unwrap();
 
             if tint_opacity > 0.0 {
                 let mut overlay = RgbaImage::new(img.width(), img.height());
@@ -226,9 +228,7 @@ fn main() {
                 let mut output2 = DynamicImage::ImageRgb8(output).to_rgba8();
                 imageops::overlay(&mut output2, &overlay, 0, 0);
                 let format = ImageFormat::Png;
-                output2
-                    .save_with_format(output_path, format)
-                    .unwrap();
+                output2.save_with_format(output_path, format).unwrap();
                 return;
             }
 
@@ -307,10 +307,13 @@ where
         eprintln!("Invalid tile size: Tile size must be divisible by {}", dim);
         std::process::exit(1);
     }
-    let extensions : HashSet<_> = extensions.iter().map(|x| x.to_owned()).collect();
-    let tile_set = if force {None} else {fs::read(&analysis_cache_path).ok()};
-    let tile_set: TileSet<[Rgb<u8>; N]> =
-        tile_set
+    let extensions: HashSet<_> = extensions.iter().map(|x| x.to_owned()).collect();
+    let tile_set = if force {
+        None
+    } else {
+        fs::read(&analysis_cache_path).ok()
+    };
+    let tile_set: TileSet<[Rgb<u8>; N]> = tile_set
         .map(|bytes| {
             let analysis: TileSet<[Rgb<u8>; N]> = bincode::deserialize(&bytes).unwrap();
             // validate the analysis: check that all the paths exist
@@ -326,12 +329,12 @@ where
                     } else {
                         None
                     }
-                    }).collect()
+                })
+                .collect()
         })
         .unwrap_or_else(|| {
             let extensions = extensions.iter().map(OsString::from).collect();
-            let tile_set =
-                generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop).unwrap();
+            let tile_set = generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop).unwrap();
             let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
             fs::write(analysis_cache_path, encoded_tile_set).unwrap();
             tile_set
@@ -341,8 +344,10 @@ where
         render_nto1_no_repeat(&img, tile_set, tile_size)
     } else {
         Ok(render_nto1(&img, tile_set, tile_size, no_repeat, randomize))
-    };
-    result.map(|result| result.image)
+    }?;
+
+    result.stats.summarise(&result.tile_set);
+    Ok(result.image)
 }
 
 fn generate_tile_set<const N: usize>(
@@ -350,7 +355,7 @@ fn generate_tile_set<const N: usize>(
     tile_size: u32,
     extensions: HashSet<OsString>,
     crop: bool,
-) -> io::Result<TileSet<[Rgb<u8>;N]>>
+) -> io::Result<TileSet<[Rgb<u8>; N]>>
 where
     // TileSet<T>: Serialize,
     // T: std::hash::Hash + Eq + Copy,
@@ -365,7 +370,7 @@ where
         );
 
     let errors: RwLock<Vec<ImageError>> = RwLock::new(vec![]);
-    let tile_set : TileSet<_> = images_paths
+    let tile_set: TileSet<_> = images_paths
         .into_par_iter()
         .map(|path| {
             let img = prepare_tile(&path, tile_size, crop);
@@ -376,10 +381,14 @@ where
             (path, Ok(x)) => Some((path, analyse::<N>(x))),
             (path, Err(error)) => {
                 let path = path.strip_prefix(tiles_path).unwrap();
-                errors.write().unwrap().push(ImageError{path: path.to_owned(), ..error});
+                errors.write().unwrap().push(ImageError {
+                    path: path.to_owned(),
+                    ..error
+                });
                 None
             }
-        }).collect();
+        })
+        .collect();
     let all_errors = errors.into_inner().unwrap();
     if !all_errors.is_empty() {
         eprintln!("Failed to read the following images({}):", all_errors.len());

@@ -7,13 +7,13 @@ use std::ops::Deref;
 use std::ops::Div;
 use std::path::{Path, PathBuf};
 
+use ::image::imageops;
+use ::image::Rgb;
 use exif::In;
 use exif::Tag;
 use image::error::LimitError;
-use ::image::imageops;
 use image::imageops::FilterType;
 use image::DynamicImage;
-use ::image::Rgb;
 use itertools::MultiUnzip;
 use num_integer::Roots;
 use rand::prelude::*;
@@ -108,7 +108,7 @@ impl<const N: usize> Tile<[Rgb<u8>; N]> {
         let mut result = [0u8.into(); N * 3];
         for i in 0..N {
             let color = self.colors[i];
-            let i3 = i*3;
+            let i3 = i * 3;
             result[i3] = color[0].into();
             result[i3 + 1] = color[1].into();
             result[i3 + 2] = color[2].into();
@@ -198,10 +198,7 @@ impl<T> TileSet<T> {
     }
     pub fn map<T1>(self, f: fn(T) -> T1) -> TileSet<T1> {
         let tiles = self.tiles.into_iter().map(|t| t.map(f)).collect();
-        TileSet {
-            tiles,
-            ..self
-        }
+        TileSet { tiles, ..self }
     }
     pub fn push_tile(&mut self, path: PathBuf, colors: T) {
         let idx = self.tiles.len() as u16 + 1;
@@ -258,9 +255,7 @@ impl<T> TileSet<T> {
 impl<const N: usize> TileSet<[Rgb<u8>; N]>
 //   where T: Copy, T: Default
 {
-    pub fn build_kiddo(
-        &self,
-    ) -> kiddo::fixed::kdtree::KdTree<SIZE, i16, { N * 3 }, 640, u16> {
+    pub fn build_kiddo(&self) -> kiddo::fixed::kdtree::KdTree<SIZE, i16, { N * 3 }, 640, u16> {
         let mut kd = kiddo::fixed::kdtree::KdTree::new();
         for tile in self.tiles.iter() {
             let mut coords = tile.coords();
@@ -318,27 +313,38 @@ impl<T> FromIterator<(PathBuf, T)> for TileSet<T> {
 }
 
 impl<T> FromIterator<(PathBuf, ::image::ImageBuffer<Rgb<u8>, Vec<u8>>, T)> for TileSet<T> {
-    fn from_iter<I: IntoIterator<Item = (PathBuf, ::image::ImageBuffer<Rgb<u8>, Vec<u8>>, T)>>(iter: I) -> Self {
+    fn from_iter<I: IntoIterator<Item = (PathBuf, ::image::ImageBuffer<Rgb<u8>, Vec<u8>>, T)>>(
+        iter: I,
+    ) -> Self {
         let (paths, tiles, images) = iter
             .into_iter()
             .enumerate()
             .map(|(idx, (path, img, color))| {
-                (path, Tile::new((idx + 1).try_into().unwrap(), color), ((idx+1) as u16, img))
+                (
+                    path,
+                    Tile::new((idx + 1).try_into().unwrap(), color),
+                    ((idx + 1) as u16, img),
+                )
             })
             .multiunzip();
-        TileSet{tiles, images, paths}
+        TileSet {
+            tiles,
+            images,
+            paths,
+        }
     }
 }
 
-impl<A: Send, T> FromParallelIterator<A> for TileSet<T> where TileSet<T>: FromIterator<A> {
+impl<A: Send, T> FromParallelIterator<A> for TileSet<T>
+where
+    TileSet<T>: FromIterator<A>,
+{
     fn from_par_iter<I>(par_iter: I) -> Self
     where
         I: IntoParallelIterator<Item = A>,
         A: Send,
     {
-        let items: Vec<_> = par_iter
-            .into_par_iter()
-            .collect();
+        let items: Vec<_> = par_iter.into_par_iter().collect();
         items.into_iter().collect()
     }
 }
@@ -349,7 +355,10 @@ pub fn prepare_tile(
     crop: bool,
 ) -> Result<::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>, ImageError> {
     // We cache resized images in the home cache path using their content hash
-    let content_hash = md5::compute(std::fs::read(path).map_err(|e| ImageError{path: path.to_owned(), error:e.into()})?);
+    let content_hash = md5::compute(std::fs::read(path).map_err(|e| ImageError {
+        path: path.to_owned(),
+        error: e.into(),
+    })?);
     let cache_path = dirs::cache_dir().unwrap().join("mosaic").join(format!(
         "{:x}{}.{}.jpg",
         content_hash,
@@ -357,11 +366,19 @@ pub fn prepare_tile(
         tile_size
     ));
     // check if the cache path exists and load it, otherwise resize and save it
-    let cached_img : Result<::image::ImageBuffer<_,_>, _> = ::image::open(&cache_path)
-        .map_err( |e| ImageError{path:path.to_owned(), error:e})
+    let cached_img: Result<::image::ImageBuffer<_, _>, _> = ::image::open(&cache_path)
+        .map_err(|e| ImageError {
+            path: path.to_owned(),
+            error: e,
+        })
         .map(|img| img.to_rgb8());
     cached_img.or_else(|_| {
-        let mut tile_img = ::image::open(path).map_err(|e| ImageError{ path: path.to_owned(), error: e})?.to_rgb8();
+        let mut tile_img = ::image::open(path)
+            .map_err(|e| ImageError {
+                path: path.to_owned(),
+                error: e,
+            })?
+            .to_rgb8();
         // Crop all the white pixels from the edges
         let is_white_pixel = |pixel: &Rgb<u8>| pixel[0] > 240 && pixel[1] > 240 && pixel[2] > 240;
 
@@ -369,9 +386,11 @@ pub fn prepare_tile(
         let h = tile_img.height();
 
         if w < tile_size || h < tile_size {
-            return Err(ImageError{
+            return Err(ImageError {
                 path: path.to_owned(),
-                error: ::image::ImageError::Limits(LimitError::from_kind(image::error::LimitErrorKind::DimensionError))
+                error: ::image::ImageError::Limits(LimitError::from_kind(
+                    image::error::LimitErrorKind::DimensionError,
+                )),
             });
         }
 
@@ -451,8 +470,9 @@ pub fn prepare_tile(
             tile_img.change_bounds(x0, y0, size, size);
         }
 
-        let tile_img = imageops::resize(tile_img.deref(), tile_size, tile_size, FilterType::Lanczos3);
-        let orientation  = get_jpeg_orientation(path).unwrap_or(1);
+        let tile_img =
+            imageops::resize(tile_img.deref(), tile_size, tile_size, FilterType::Lanczos3);
+        let orientation = get_jpeg_orientation(path).unwrap_or(1);
         let tile_img = rotate(tile_img.into(), orientation);
         tile_img.save(cache_path).unwrap();
         Ok(tile_img.into())
@@ -463,36 +483,35 @@ fn get_jpeg_orientation(file_path: &Path) -> Result<u32, exif::Error> {
     let file = std::fs::File::open(file_path).expect("problem opening the file");
     let mut bufreader = std::io::BufReader::new(&file);
     let exifreader = exif::Reader::new();
-    let exif = exifreader
-      .read_from_container(&mut bufreader)?;
+    let exif = exifreader.read_from_container(&mut bufreader)?;
     let orientation: u32 = match exif.get_field(Tag::Orientation, In::PRIMARY) {
-      Some(orientation) => match orientation.value.get_uint(0) {
-        Some(v @ 1..=8) => v,
-        _ => 1,
-      },
-      None => 1,
+        Some(orientation) => match orientation.value.get_uint(0) {
+            Some(v @ 1..=8) => v,
+            _ => 1,
+        },
+        None => 1,
     };
 
     Ok(orientation)
-  }
+}
 
 fn rotate(mut img: DynamicImage, orientation: u32) -> DynamicImage {
     let rgba = img.color().has_alpha();
     img = match orientation {
-      2 => DynamicImage::ImageRgba8(imageops::flip_horizontal(&img)),
-      3 => DynamicImage::ImageRgba8(imageops::rotate180(&img)),
-      4 => DynamicImage::ImageRgba8(imageops::flip_vertical(&img)),
-      5 => DynamicImage::ImageRgba8(imageops::flip_horizontal(&imageops::rotate90(&img))),
-      6 => DynamicImage::ImageRgba8(imageops::rotate90(&img)),
-      7 => DynamicImage::ImageRgba8(imageops::flip_horizontal(&imageops::rotate270(&img))),
-      8 => DynamicImage::ImageRgba8(imageops::rotate270(&img)),
-      _ => img,
+        2 => DynamicImage::ImageRgba8(imageops::flip_horizontal(&img)),
+        3 => DynamicImage::ImageRgba8(imageops::rotate180(&img)),
+        4 => DynamicImage::ImageRgba8(imageops::flip_vertical(&img)),
+        5 => DynamicImage::ImageRgba8(imageops::flip_horizontal(&imageops::rotate90(&img))),
+        6 => DynamicImage::ImageRgba8(imageops::rotate90(&img)),
+        7 => DynamicImage::ImageRgba8(imageops::flip_horizontal(&imageops::rotate270(&img))),
+        8 => DynamicImage::ImageRgba8(imageops::rotate270(&img)),
+        _ => img,
     };
     if !rgba {
-      img = DynamicImage::ImageRgb8(img.into_rgb8());
+        img = DynamicImage::ImageRgb8(img.into_rgb8());
     }
     img
-  }
+}
 
 fn most_common_value(values: impl Iterator<Item = u32>) -> u32 {
     let most_common = values
@@ -536,7 +555,6 @@ mod tests {
         assert_eq!(coords, [4, 5, 6, 1, 2, 3, 10, 11, 12, 7, 8, 9]);
         flipped_coords(&mut coords);
         assert_eq!(coords, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-
 
         // Add more test cases here
     }

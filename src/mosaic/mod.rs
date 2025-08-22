@@ -7,10 +7,10 @@ pub mod tiles;
 use std::collections::HashSet;
 use std::sync::{Mutex, RwLock};
 
-use error::ImageError;
-use ::image::{imageops, Rgb};
 use ::image::RgbImage;
+use ::image::{imageops, Rgb};
 use color::average_color;
+use error::ImageError;
 use fixed::traits::FromFixed;
 use indicatif::{ProgressBar, ProgressStyle};
 use kiddo::fixed::distance::Manhattan;
@@ -29,15 +29,13 @@ pub fn render<'a>(
 ) -> RgbImage {
     let tile_size_stepped = tile_size / step as u32;
 
-    let pb = ProgressBar::new(
-        (source_img.height() * source_img.width() / step / step) as u64,
-    )
-    .with_message("Rendering")
-    .with_style(
-        ProgressStyle::default_bar()
-            .template("{msg} {wide_bar} {pos}/{len} ({per_sec})")
-            .unwrap(),
-    );
+    let pb = ProgressBar::new((source_img.height() * source_img.width() / step / step) as u64)
+        .with_message("Rendering")
+        .with_style(
+            ProgressStyle::default_bar()
+                .template("{msg} {wide_bar} {pos}/{len} ({per_sec})")
+                .unwrap(),
+        );
 
     let segments: Vec<_> = (0..source_img.height())
         .into_par_iter()
@@ -80,7 +78,7 @@ pub fn render_nto1<const N: usize>(
     tile_size: u32,
     no_repeat: bool,
     randomize: Option<f64>,
-) -> RenderResult
+) -> RenderResult<N>
 where
     [(); N * 3]:,
 {
@@ -164,24 +162,25 @@ where
     });
 
     let stats = stats.into_inner().unwrap();
-    stats.summarise(&tile_set);
 
     RenderResult {
         image,
-        stats: stats,
+        stats,
+        tile_set,
     }
 }
 
-pub(crate) struct RenderResult {
+pub(crate) struct RenderResult<const N: usize> {
     pub(crate) image: RgbImage,
-    pub(crate) stats: RenderStats<tiles::SIZE>
+    pub(crate) tile_set: TileSet<[Rgb<u8>; N]>,
+    pub(crate) stats: RenderStats<tiles::SIZE>,
 }
 
 pub fn render_nto1_no_repeat<const N: usize>(
     source_img: &RgbImage,
     tile_set: TileSet<[Rgb<u8>; N]>,
     tile_size: u32,
-) -> Result<RenderResult, ImageError>
+) -> Result<RenderResult<N>, ImageError>
 where
     [(); N * 3]:,
 {
@@ -218,16 +217,13 @@ where
         );
 
     let compute_nearest = |n: u32| {
-            let x = n / vtiles * step;
-            let y = n % vtiles * step;
-            let tile = Tile::from_colors(get_img_colors(x, y, step, source_img));
-            let coords = tile.coords();
-            let mut nearest = kdtree
-                .read()
-                .unwrap()
-                .nearest_n::<Manhattan>(&coords, 10);
-            nearest.reverse();
-            nearest
+        let x = n / vtiles * step;
+        let y = n % vtiles * step;
+        let tile = Tile::from_colors(get_img_colors(x, y, step, source_img));
+        let coords = tile.coords();
+        let mut nearest = kdtree.read().unwrap().nearest_n::<Manhattan>(&coords, 10);
+        nearest.reverse();
+        nearest
     };
 
     let mut matches: Vec<_> = (0..htiles * vtiles)
@@ -268,13 +264,26 @@ where
             let tile_y = (n as u32 % vtiles) * tile_size;
             // eprintln!("n={n}, tile_x={tile_x}, tile_y={tile_y}");
             imageops::overlay(&mut image, &tile_img, tile_x.into(), tile_y.into());
-            stats.lock().unwrap().push_tile(&tile, nearest_item.distance);
+            stats
+                .lock()
+                .unwrap()
+                .push_tile(&tile, nearest_item.distance);
             let mut tree = kdtree.write().unwrap();
             let mut coords = tile.coords();
             // eprintln!("Removing tile {}", item);
-            assert!(tree.remove(&coords, item) > 0, "item: {:?}, tile: {:?}", item, tile.flipped);
+            assert!(
+                tree.remove(&coords, item) > 0,
+                "item: {:?}, tile: {:?}",
+                item,
+                tile.flipped
+            );
             flipped_coords(&mut coords);
-            assert!(tree.remove(&coords, -item) > 0, "item: {:?}, tile: {:?}", item, tile.flipped);
+            assert!(
+                tree.remove(&coords, -item) > 0,
+                "item: {:?}, tile: {:?}",
+                item,
+                tile.flipped
+            );
             pb.inc(1);
         } else {
             if nearest.is_empty() {
@@ -289,9 +298,12 @@ where
     }
 
     let stats = stats.into_inner().unwrap();
-    stats.summarise(&tile_set);
 
-    Ok(RenderResult{image, stats})
+    Ok(RenderResult {
+        image,
+        stats,
+        tile_set,
+    })
 }
 
 fn compare_matches<B: Ord, C>(
@@ -453,7 +465,6 @@ mod tests {
             .map(|img| (PathBuf::new(), img.clone(), analyse::<N>(img.clone())))
             .collect();
 
-
         for img in universe.iter() {
             let rendered_img = render_nto1(&img, tile_set.clone(), dim, false, None);
             assert_eq!(
@@ -469,7 +480,7 @@ mod tests {
 
         // for any image built from tiles from this universe without duplicates, the mosaic image should be an exact match
         for tiles in &universe.iter().chunks(2) {
-            let mut img = RgbImage::new(dim, 2*dim);
+            let mut img = RgbImage::new(dim, 2 * dim);
             for (i, tile) in tiles.enumerate() {
                 imageops::overlay(&mut img, tile, 0, i as i64 * dim as i64);
             }
