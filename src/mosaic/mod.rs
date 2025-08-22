@@ -14,6 +14,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use kiddo::fixed::distance::Manhattan;
 use kiddo::NearestNeighbour;
 use rand::prelude::IteratorRandom;
+use rand::prelude::SliceRandom;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use stats::Stats;
 use tiles::{Tile, TileSet};
@@ -41,7 +42,10 @@ pub fn render<'a>(
         .step_by(step)
         .map(|y| {
             let mut image = RgbImage::new(source_img.width() * tile_size_stepped, tile_size);
-            for x in (0..source_img.width()).step_by(step) {
+            let mut indices: Vec<_> = (0..source_img.width()).step_by(step).collect();
+            indices.shuffle(&mut rand::thread_rng());
+
+            for x in indices.into_iter() {
                 pb.inc(1);
 
                 let tile_img = get_tile(x, y);
@@ -154,9 +158,10 @@ where
             }
         }
         stats.lock().unwrap().push_tile(&tile);
-        tile_set
-            .get_image(&tile, tile_size)
-            .expect("Image not found")
+        tile_set.get_image(&tile, tile_size).expect(&format!(
+            "Image not found: {}",
+            tile_set.get_path(&tile).to_str().unwrap()
+        ))
     });
 
     stats.into_inner().unwrap().summarise(&tile_set);
