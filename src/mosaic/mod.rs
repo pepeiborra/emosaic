@@ -154,7 +154,10 @@ where
                 writer.unwrap().remove(&tile.coords(), closest.item);
             }
         }
-        stats.lock().unwrap().push_tile(&tile, closest.distance);
+        stats
+            .lock()
+            .unwrap()
+            .push_tile(x, y, &tile, closest.distance);
         tile_set.get_image(&tile, tile_size).expect(&format!(
             "Image not found: {}",
             tile_set.get_path(&tile).to_str().unwrap()
@@ -267,7 +270,7 @@ where
             stats
                 .lock()
                 .unwrap()
-                .push_tile(&tile, nearest_item.distance);
+                .push_tile(tile_x, tile_y, &tile, nearest_item.distance);
             let mut tree = kdtree.write().unwrap();
             let mut coords = tile.coords();
             // eprintln!("Removing tile {}", item);

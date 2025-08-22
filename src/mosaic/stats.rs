@@ -5,32 +5,34 @@ use itertools::Itertools;
 use super::tiles::{Tile, TileSet};
 
 pub struct RenderStats<D> {
-    tiles: Vec<Tile<D>>,
+    tiles: HashMap<(u32, u32), Tile<D>>,
 }
 
 impl<D> RenderStats<D>
 where
     f64: From<D>,
     // D: From<u32>,
-    D: std::cmp::Ord + std::ops::Sub<Output = D>,
+    D: std::cmp::Ord,
+    D: std::ops::Sub<Output = D>,
+    D: std::convert::From<u8>,
     D: std::ops::AddAssign,
     D: Copy,
     D: std::fmt::Display,
 {
     pub fn new() -> Self {
-        Self { tiles: vec![] }
+        Self { tiles: [].into() }
     }
-    pub fn push_tile<T>(&mut self, tile: &Tile<T>, distance: D) {
+    pub fn push_tile<T>(&mut self, x: u32, y: u32, tile: &Tile<T>, distance: D) {
         let t = Tile {
             colors: distance,
             ..*tile
         };
-        self.tiles.push(t);
+        self.tiles.insert((x, y), t);
     }
     pub fn summarise<T>(&self, tile_set: &TileSet<T>) {
-        let mut total_distance: D = self.tiles[0].colors - self.tiles[0].colors;
+        let mut total_distance: D = 0_u8.into();
         let mut paths_count: HashMap<_, u16> = HashMap::with_capacity(self.tiles.len());
-        for t in self.tiles.iter() {
+        for t in self.tiles.values() {
             total_distance += t.colors;
             *paths_count.entry(tile_set.get_path(&t)).or_default() += 1;
         }
@@ -56,7 +58,7 @@ where
         eprintln!("Worst 10 matches: ");
         let worst10: Vec<_> = self
             .tiles
-            .iter()
+            .values()
             .sorted_by(|a, b| b.colors.cmp(&a.colors))
             .take(10)
             .collect();
