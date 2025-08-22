@@ -5,7 +5,7 @@ mod mosaic;
 
 use derive_more::Display;
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::create_dir_all;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
@@ -77,9 +77,13 @@ struct Mosaic {
     /// Downsampling factor applied to the original image
     downsample: u16,
 
-    #[clap(long)]
-    /// Select one of the best tiles randomly
-    randomize: bool,
+    #[clap(long, value_parser = is_percentage)]
+    /// Select one of the best tiles randomly (within x% distance from the best one)
+    randomize: Option<f64>,
+
+    #[clap(long, default_values_t = [String::from("jpg"), String::from("jpeg")])]
+    /// Extensions of image files in the tiles dir
+    extensions: Vec<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -119,6 +123,13 @@ fn is_between_zero_and_one(s: &str) -> Result<f64, String> {
     Err(String::from("Value must be between 0 and 1"))
 }
 
+fn is_percentage(s: &str) -> Result<f64, String> {
+    let value: f64 = s.parse().map_err(|e| format!("{}", e))?;
+    if (0.0..=100.0).contains(&value) {
+        return Ok(value);
+    }
+    Err(String::from("Value must be between 0 and 100"))
+}
 fn main() {
     let cli = Cli::parse();
 
@@ -155,23 +166,22 @@ fn main() {
                 }
             };
 
-            // Read all images in tiles directory
-            let extensions: HashSet<&OsStr> = [OsStr::new("jpg"), OsStr::new("jpeg")].into();
-
             let output = match mode {
-                Mode::_1 => n_to_1::<1>(args, extensions, &img, tile_size),
-                Mode::_2 => n_to_1::<4>(args, extensions, &img, tile_size),
-                Mode::_3 => n_to_1::<9>(args, extensions, &img, tile_size),
-                Mode::_4 => n_to_1::<16>(args, extensions, &img, tile_size),
-                Mode::_5 => n_to_1::<25>(args, extensions, &img, tile_size),
-                Mode::_6 => n_to_1::<36>(args, extensions, &img, tile_size),
-                Mode::_8 => n_to_1::<64>(args, extensions, &img, tile_size),
-                Mode::_16 => n_to_1::<256>(args, extensions, &img, tile_size),
-                Mode::_32 => n_to_1::<1024>(args, extensions, &img, tile_size),
-                Mode::_64 => n_to_1::<4096>(args, extensions, &img, tile_size),
-                Mode::_128 => n_to_1::<16384>(args, extensions, &img, tile_size),
+                Mode::_1 => n_to_1::<1>(args, &img, tile_size),
+                Mode::_2 => n_to_1::<4>(args, &img, tile_size),
+                Mode::_3 => n_to_1::<9>(args, &img, tile_size),
+                Mode::_4 => n_to_1::<16>(args, &img, tile_size),
+                Mode::_5 => n_to_1::<25>(args, &img, tile_size),
+                Mode::_6 => n_to_1::<36>(args, &img, tile_size),
+                Mode::_8 => n_to_1::<64>(args, &img, tile_size),
+                Mode::_16 => n_to_1::<256>(args, &img, tile_size),
+                Mode::_32 => n_to_1::<1024>(args, &img, tile_size),
+                Mode::_64 => n_to_1::<4096>(args, &img, tile_size),
+                Mode::_128 => n_to_1::<16384>(args, &img, tile_size),
                 Mode::Random => {
-                    let images = find_images(&args.tiles_dir, |path| extensions.contains(path));
+                    let images = find_images(&args.tiles_dir, |ext| {
+                        args.extensions.contains(&ext.to_string_lossy().to_string())
+                    });
                     let mut tile_set = TileSet::<()>::new();
                     for path_buf in images.unwrap() {
                         tile_set.push_tile(path_buf, ());
@@ -216,6 +226,7 @@ fn main() {
 
 fn n_to_1<const N: usize>(
     Mosaic {
+        extensions,
         force,
         no_repeat,
         downsample,
@@ -223,7 +234,6 @@ fn n_to_1<const N: usize>(
         tiles_dir,
         ..
     }: Mosaic,
-    extensions: HashSet<&OsStr>,
     original_img: &image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
     tile_size: u32,
 ) -> image::ImageBuffer<image::Rgb<u8>, Vec<u8>>
@@ -278,6 +288,7 @@ where
             bincode::deserialize(&bytes).unwrap()
         }
         _ => {
+            let extensions = extensions.into_iter().map(OsString::from).collect();
             let tile_set =
                 generate_tile_set(&tiles_dir, tile_size, _Nto1::<N>(), extensions).unwrap();
             let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
@@ -300,10 +311,11 @@ fn generate_tile_set<T>(
     tiles_path: &Path,
     tile_size: u32,
     analysis: impl AnalyseTiles<T>,
-    extensions: HashSet<&OsStr>,
+    extensions: HashSet<OsString>,
 ) -> io::Result<TileSet<T>>
 where
-    TileSet<T>: Serialize, T: std::hash::Hash + Eq + Copy
+    TileSet<T>: Serialize,
+    T: std::hash::Hash + Eq + Copy,
 {
     let images_paths = find_images(tiles_path, |path: &OsStr| extensions.contains(path))?;
     let pb = ProgressBar::new(images_paths.len() as u64)
@@ -347,11 +359,17 @@ where
     Ok(tile_set)
 }
 
-fn summarise_tileset<T>(tile_set: &TileSet<T>) where T: std::hash::Hash + Eq + Copy {
-    let mut tiles_by_color : HashMap<T,  u16> = HashMap::new();
+fn summarise_tileset<T>(tile_set: &TileSet<T>)
+where
+    T: std::hash::Hash + Eq + Copy,
+{
+    let mut tiles_by_color: HashMap<T, u16> = HashMap::new();
     for tile in tile_set.tiles.iter() {
         *tiles_by_color.entry(tile.colors).or_default() += 1;
     }
 
-    eprintln!("The analysis produced {} unique tiles", tiles_by_color.len());
+    eprintln!(
+        "The analysis produced {} unique tiles",
+        tiles_by_color.len()
+    );
 }

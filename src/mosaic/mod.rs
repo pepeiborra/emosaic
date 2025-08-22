@@ -6,6 +6,7 @@ pub mod tiles;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use fixed::traits::FromFixed;
 use ::image::RgbImage;
 use ::image::{imageops, Rgb};
 use color::average_color;
@@ -72,7 +73,7 @@ pub fn render_nto1<const N: usize>(
     tile_set: TileSet<[Rgb<u8>; N]>,
     tile_size: u32,
     no_repeat: bool,
-    randomize: bool,
+    randomize: Option<f64>,
 ) -> RgbImage
 where
     [(); N * 3]:,
@@ -108,18 +109,21 @@ where
         let closest: NearestNeighbour<_, _>;
         {
             let mut kdtree = kdtree.lock().unwrap();
-            if randomize {
+            match randomize {
+              Some(factor) => {
                 let mut closest_ones = kdtree.nearest_n::<Manhattan>(&tile.coords(), 20);
                 closest_ones.sort_by_key(|x| x.distance);
-                let min_distance = closest_ones[0].distance;
+                let min_distance = f64::from_fixed(closest_ones[0].distance);
                 closest = closest_ones
                     .into_iter()
-                    .take_while(|x| x.distance - min_distance < min_distance / 100)
+                    .take_while(|x| f64::from_fixed(x.distance) - min_distance < factor * min_distance / 100.0)
                     .choose(&mut rand::thread_rng())
                     .unwrap();
-            } else {
+            },
+            _ => {
                 closest = kdtree.nearest_one::<Manhattan>(&tile.coords());
             }
+        }
             assert!(
                 closest.item != 0,
                 "tile: {:?}, closest: {:?}",
@@ -241,7 +245,7 @@ mod tests {
         let mut tile_set: TileSet<[Rgb<u8>; 1]> = TileSet::new();
         tile_set.push_tile_with_image(PathBuf::new(), [Rgb([0, 0, 0]); 1], RgbImage::new(8, 8));
         let tile_size = 8;
-        let output = render_nto1(&source_img, tile_set, tile_size, false, false);
+        let output = render_nto1(&source_img, tile_set, tile_size, false, None);
         assert_eq!(output.width(), source_img.width() * tile_size);
         assert_eq!(output.height(), source_img.height() * tile_size);
     }
@@ -288,7 +292,7 @@ mod tests {
         }
 
         let source_img = RgbImage::from_pixel(N as u32, N as u32, Rgb([255, 0, 0]));
-        let rendered_img = render_nto1(&source_img, tile_set, tile_size, no_repeat, false);
+        let rendered_img = render_nto1(&source_img, tile_set, tile_size, no_repeat, None);
 
         // Check if the rendered image is consistent with the tiles
         for y in 0..rendered_img.height() {
