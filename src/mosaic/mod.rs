@@ -4,12 +4,12 @@ pub mod stats;
 pub mod tiles;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
-use fixed::traits::FromFixed;
 use ::image::RgbImage;
 use ::image::{imageops, Rgb};
 use color::average_color;
+use fixed::traits::FromFixed;
 use indicatif::{ProgressBar, ProgressStyle};
 use kiddo::fixed::distance::Manhattan;
 use kiddo::NearestNeighbour;
@@ -80,7 +80,7 @@ where
 {
     let stats = Mutex::new(Stats::new());
 
-    let kdtree = Mutex::new(tile_set.build_kiddo());
+    let kdtree = RwLock::new(tile_set.build_kiddo());
 
     let step = (N as f64).sqrt() as usize;
 
@@ -94,10 +94,8 @@ where
         vtiles * tile_size,
     );
 
-    if no_repeat && (htiles*vtiles) as usize > tile_set.len()*2 {
-        panic!(
-            "Error: not enough tiles to fill the image without repeating"
-        );
+    if no_repeat && (htiles * vtiles) as usize > tile_set.len() * 2 {
+        panic!("Error: not enough tiles to fill the image without repeating");
     }
 
     let res = render(source_img, tile_size, step, |x, y| {
@@ -108,22 +106,40 @@ where
         let mut tile = Tile::from_colors(colors);
         let closest: NearestNeighbour<_, _>;
         {
-            let mut kdtree = kdtree.lock().unwrap();
+            let writer = if no_repeat {
+                Some(kdtree.write().unwrap())
+            } else {
+                None
+            };
             match randomize {
-              Some(factor) => {
-                let mut closest_ones = kdtree.nearest_n::<Manhattan>(&tile.coords(), 20);
-                closest_ones.sort_by_key(|x| x.distance);
-                let min_distance = f64::from_fixed(closest_ones[0].distance);
-                closest = closest_ones
-                    .into_iter()
-                    .take_while(|x| f64::from_fixed(x.distance) - min_distance < factor * min_distance / 100.0)
-                    .choose(&mut rand::thread_rng())
-                    .unwrap();
-            },
-            _ => {
-                closest = kdtree.nearest_one::<Manhattan>(&tile.coords());
+                Some(factor) => {
+                    let mut closest_ones = kdtree
+                        .read()
+                        .unwrap()
+                        .nearest_n::<Manhattan>(&tile.coords(), 20);
+                    closest_ones.sort_by_key(|x| x.distance);
+                    let min_distance = f64::from_fixed(closest_ones[0].distance);
+                    closest = closest_ones
+                        .into_iter()
+                        .take_while(|x| {
+                            f64::from_fixed(x.distance) - min_distance
+                                < factor * min_distance / 100.0
+                        })
+                        .choose(&mut rand::thread_rng())
+                        .unwrap();
+                }
+                _ => {
+                    closest = writer.as_ref().map_or_else(
+                        || {
+                            kdtree
+                                .read()
+                                .unwrap()
+                                .nearest_one::<Manhattan>(&tile.coords())
+                        },
+                        |kdtree| kdtree.nearest_one::<Manhattan>(&tile.coords()),
+                    );
+                }
             }
-        }
             assert!(
                 closest.item != 0,
                 "tile: {:?}, closest: {:?}",
@@ -134,11 +150,13 @@ where
                 .get_tile(closest.item)
                 .expect(format!("Tile not found: {:?}", closest.item).as_str());
             if no_repeat {
-                kdtree.remove(&tile.coords(), closest.item);
+                writer.unwrap().remove(&tile.coords(), closest.item);
             }
         }
         stats.lock().unwrap().push_tile(&tile);
-        tile_set.get_image(&tile, tile_size).expect("Image not found")
+        tile_set
+            .get_image(&tile, tile_size)
+            .expect("Image not found")
     });
 
     stats.into_inner().unwrap().summarise(&tile_set);
@@ -159,7 +177,9 @@ pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u3
             pb.inc(1);
             imageops::overlay(
                 &mut output,
-                &tile_set.get_image(&tile_set.random_tile(), tile_size).expect("Image not found"),
+                &tile_set
+                    .get_image(&tile_set.random_tile(), tile_size)
+                    .expect("Image not found"),
                 tile_x * tile_size,
                 tile_y * tile_size,
             );
