@@ -1,5 +1,6 @@
 pub mod color;
 pub mod image;
+pub mod analysis;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

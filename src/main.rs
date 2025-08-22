@@ -1,3 +1,4 @@
+#![feature(iter_array_chunks)]
 mod mosaic;
 
 use std::fs;
@@ -6,19 +7,26 @@ use std::path::{Path, PathBuf};
 use clap::{self, Parser, ValueEnum};
 use image::{imageops, DynamicImage, ImageFormat, RgbImage, Rgba, RgbaImage};
 
+use indicatif::ProgressBar;
 use mosaic::{
-    image::{analyse_1to1, analyse_4to1, read_images_in_dir},
+    analysis::{_1to1, _4to1},
+    image::read_images_in_dir,
     render_1to1, render_4to1, render_random, Tile, TileSet,
 };
 use serde::Serialize;
 
+trait AnalyseTiles<T> {
+    fn analyse(self:Self, images: impl Iterator<Item = (PathBuf, RgbImage)>) -> TileSet<T>;
+}
+
 fn generate_tile_set<T: Serialize>(
     tiles_path: &Path,
     cache_path: &Path,
-    analyse: fn(Vec<(PathBuf, RgbImage)>) -> TileSet<T>,
+    analysis: impl AnalyseTiles<T>,
 ) -> TileSet<T> {
-    let images = read_images_in_dir(tiles_path);
-    let tile_set = analyse(images);
+    let pb = ProgressBar::new(1000);
+    let images = pb.wrap_iter(read_images_in_dir(tiles_path));
+    let tile_set = analysis.analyse(images);
     let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
     fs::write(&cache_path, encoded_tile_set).unwrap();
     tile_set
@@ -114,8 +122,11 @@ fn main() {
                 fs::remove_file(&analysis_cache_path).ok();
             }
             let tile_set = match fs::read(&analysis_cache_path) {
-                Ok(bytes) => bincode::deserialize(&bytes).unwrap(),
-                _ => generate_tile_set(tiles_path, &analysis_cache_path, analyse_1to1),
+                Ok(bytes) =>{
+                    eprintln!("Reusing analysis cache");
+                    bincode::deserialize(&bytes).unwrap()
+                },
+                _ => generate_tile_set(tiles_path, &analysis_cache_path, _1to1()),
             };
             render_1to1(&img, &tile_set, tile_size)
         }
@@ -126,7 +137,7 @@ fn main() {
             }
             let tile_set = match fs::read(&analysis_cache_path) {
                 Ok(bytes) => bincode::deserialize(&bytes).unwrap(),
-                _ => generate_tile_set(tiles_path, &analysis_cache_path, analyse_4to1),
+                _ => generate_tile_set(tiles_path, &analysis_cache_path, _4to1()),
             };
             render_4to1(&img, &tile_set, tile_size)
         }
@@ -166,7 +177,8 @@ fn main() {
         return;
     }
 
+    eprintln!("Writing output file to {}", output_path);
     output
-        .save_with_format(output_path, ImageFormat::PNG)
+        .save_with_format(output_path, ImageFormat::JPEG)
         .unwrap();
 }
