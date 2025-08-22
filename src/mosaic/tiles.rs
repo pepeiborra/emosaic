@@ -1,15 +1,16 @@
-use std::hash::Hasher;
-use std::hash::Hash;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::iter::FromIterator;
+use std::ops::Div;
 use std::path::{Path, PathBuf};
 
-use fixed::FixedU32;
 use ::image::imageops;
 use ::image::FilterType;
 use ::image::ImageResult;
 use ::image::Rgb;
+use fixed::FixedU32;
 use num_integer::Roots;
 use rand::prelude::*;
 use serde::ser::SerializeTuple;
@@ -223,10 +224,10 @@ impl<T> TileSet<T> {
         tile_size: u32,
     ) -> ImageResult<image::ImageBuffer<Rgb<u8>, Vec<u8>>> {
         let path = self.get_path(tile);
-        let image = self.images.get(&tile.idx).map_or_else(
-            || prepare_tile(path, tile_size),
-            |x| Ok(x.clone()),
-        )?;
+        let image = self
+            .images
+            .get(&tile.idx)
+            .map_or_else(|| prepare_tile(path, tile_size, true), |x| Ok(x.clone()))?;
         Ok(if tile.flipped {
             image::imageops::flip_horizontal(&image)
         } else {
@@ -247,16 +248,15 @@ impl<const N: usize> TileSet<[Rgb<u8>; N]>
 {
     pub fn build_kiddo(
         &self,
-    ) -> kiddo::fixed::kdtree::KdTree<FixedU32<U0>, i16, {N*3}, 640, u16>
-    {
+    ) -> kiddo::fixed::kdtree::KdTree<FixedU32<U0>, i16, { N * 3 }, 640, u16> {
         let mut kd = kiddo::fixed::kdtree::KdTree::new();
         for tile in self.tiles.iter() {
             let mut coords = tile.coords();
             let idx: i16 = tile.idx.try_into().unwrap();
-            assert!(idx !=0);
+            assert!(idx != 0);
             kd.add(&coords, idx);
             flipped_coords(&mut coords);
-            assert!(-idx !=0);
+            assert!(-idx != 0);
             kd.add(&coords, -idx);
         }
         assert!(kd.size() as usize == self.tiles.len() * 2);
@@ -284,7 +284,7 @@ fn flipped_coords<A, const N: usize>(coords: &mut [A; N]) {
         for j in 0..cols.div_euclid(2) {
             // swap with the mirror column
             let start = i * coords_in_row + j * 3;
-            let start_flipped = (i + 1 )* coords_in_row - (j + 1) * 3;
+            let start_flipped = (i + 1) * coords_in_row - (j + 1) * 3;
             for h in 0..3 {
                 coords.swap(start + h, start_flipped + h);
             }
@@ -297,7 +297,9 @@ impl<T> FromIterator<(PathBuf, T)> for TileSet<T> {
         let (tiles, paths) = iter
             .into_iter()
             .enumerate()
-            .map(|(idx, (path_buf, color))| (Tile::new((idx+1).try_into().unwrap(), color), path_buf))
+            .map(|(idx, (path_buf, color))| {
+                (Tile::new((idx + 1).try_into().unwrap(), color), path_buf)
+            })
             .unzip();
         TileSet::from_tiles(tiles, paths)
     }
@@ -306,18 +308,20 @@ impl<T> FromIterator<(PathBuf, T)> for TileSet<T> {
 pub fn prepare_tile(
     path: &Path,
     tile_size: u32,
+    crop: bool,
 ) -> ImageResult<::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>> {
     // We cache resized images in the home cache path using their content hash
     let content_hash = md5::compute(std::fs::read(path)?);
-    let cache_path = dirs::cache_dir()
-        .unwrap()
-        .join("mosaic")
-        .join(format!("{:x}.{}.jpg", content_hash, tile_size));
+    let cache_path = dirs::cache_dir().unwrap().join("mosaic").join(format!(
+        "{:x}{}.{}.jpg",
+        content_hash,
+        if crop { "_cropped" } else { "" },
+        tile_size
+    ));
     // check if the cache path exists and load it, otherwise resize and save it
     if cache_path.exists() {
         return Ok(::image::open(&cache_path)?.to_rgb());
     } else {
-        // eprintln!("Preparing tile {}", path.to_str().unwrap());
         let mut tile_img = ::image::open(path)?.to_rgb();
         // Crop all the white pixels from the edges
         let is_white_pixel = |pixel: &Rgb<u8>| pixel[0] > 240 && pixel[1] > 240 && pixel[2] > 240;
@@ -384,17 +388,27 @@ pub fn prepare_tile(
         let first_non_white_row = most_common_value(from_top.into_iter().filter(|x| *x != h));
         let last_non_white_row = most_common_value(from_bottom.into_iter().filter(|x| *x != 0));
 
-        debug_assert!(first_non_white_col < last_non_white_col);
-        debug_assert!(first_non_white_row < last_non_white_row);
+        assert!(first_non_white_col < last_non_white_col);
+        assert!(first_non_white_row < last_non_white_row);
 
-        // eprintln!("Non white starts at ({}, {}), ends at ({}, {})", first_non_white_col, first_non_white_row, last_non_white_col, last_non_white_row);
-        let tile_img = imageops::crop(
+        let w = last_non_white_col - first_non_white_col;
+        let h = last_non_white_row - first_non_white_row;
+
+        let mut tile_img = imageops::crop(
             &mut tile_img,
             first_non_white_col,
             first_non_white_row,
-            last_non_white_col - first_non_white_col,
-            last_non_white_row - first_non_white_row,
+            w,
+            h,
         );
+        if crop {
+            // tiles must be square, so get the largest square that fits inside the image
+            let size = w.min(h);
+            let x0 = (w - size).div(2);
+            let y0 = (h - size).div(2);
+            tile_img.change_bounds(x0, y0, size, size);
+        }
+
         let tile_img = imageops::resize(&tile_img, tile_size, tile_size, FilterType::Lanczos3);
         tile_img.save(cache_path).unwrap();
         Ok(tile_img)
@@ -429,7 +443,7 @@ mod tests {
     fn test_prepare_tile() {
         let path = Path::new("example/warhol.png");
         let tile_size = 32;
-        let result = prepare_tile(path, tile_size);
+        let result = prepare_tile(path, tile_size, true);
         assert!(result.is_ok());
         let tile_img = result.unwrap();
         assert_eq!(tile_img.width(), tile_size);
@@ -438,10 +452,9 @@ mod tests {
 
     #[test]
     fn test_flipped_coords() {
-
         let mut coords = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         flipped_coords(&mut coords);
-        assert_eq!(coords, [4,5,6,1,2,3,10,11,12,7,8,9]);
+        assert_eq!(coords, [4, 5, 6, 1, 2, 3, 10, 11, 12, 7, 8, 9]);
 
         // Add more test cases here
     }
@@ -450,11 +463,16 @@ mod tests {
     fn test_tile_coords() {
         let tile: Tile<[Rgb<u8>; 1]> = Tile::from_colors([Rgb([1, 2, 3])]);
         let coords = tile.coords();
-        assert_eq!(coords, [1,2,3]);
+        assert_eq!(coords, [1, 2, 3]);
 
-        let tile: Tile<[Rgb<u8>; 4]> = Tile::from_colors([Rgb([1, 2, 3]), Rgb([4, 5, 6]), Rgb([7, 8, 9]), Rgb([10, 11, 12])]);
+        let tile: Tile<[Rgb<u8>; 4]> = Tile::from_colors([
+            Rgb([1, 2, 3]),
+            Rgb([4, 5, 6]),
+            Rgb([7, 8, 9]),
+            Rgb([10, 11, 12]),
+        ]);
         let coords = tile.coords();
-        assert_eq!(coords, [1,2,3,4,5,6,7,8,9,10,11,12]);
+        assert_eq!(coords, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     }
 
     // Add more tests here

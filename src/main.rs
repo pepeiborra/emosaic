@@ -37,6 +37,10 @@ struct Cli {
     #[clap(value_parser)]
     img: PathBuf,
 
+    #[clap(long)]
+    /// Crop tiles instead of resizing
+    crop: bool,
+
     #[clap(subcommand)]
     subcmd: Option<SubCommand>,
 }
@@ -138,6 +142,7 @@ fn main() {
         output_path,
         tile_size,
         subcmd,
+        crop,
     } = cli;
 
     let cache_path: PathBuf = dirs::cache_dir().unwrap().join("mosaic");
@@ -146,7 +151,7 @@ fn main() {
     match subcmd {
         None => (),
         Some(SubCommand::Prepare) => {
-            let tile = prepare_tile(&img, tile_size).unwrap();
+            let tile = prepare_tile(&img, tile_size, crop).unwrap();
             tile.save(&output_path).unwrap();
         }
         Some(SubCommand::Mosaic(
@@ -167,17 +172,17 @@ fn main() {
             };
 
             let output = match mode {
-                Mode::_1 => n_to_1::<1>(args, &img, tile_size),
-                Mode::_2 => n_to_1::<4>(args, &img, tile_size),
-                Mode::_3 => n_to_1::<9>(args, &img, tile_size),
-                Mode::_4 => n_to_1::<16>(args, &img, tile_size),
-                Mode::_5 => n_to_1::<25>(args, &img, tile_size),
-                Mode::_6 => n_to_1::<36>(args, &img, tile_size),
-                Mode::_8 => n_to_1::<64>(args, &img, tile_size),
-                Mode::_16 => n_to_1::<256>(args, &img, tile_size),
-                Mode::_32 => n_to_1::<1024>(args, &img, tile_size),
-                Mode::_64 => n_to_1::<4096>(args, &img, tile_size),
-                Mode::_128 => n_to_1::<16384>(args, &img, tile_size),
+                Mode::_1 => n_to_1::<1>(args, &img, tile_size, crop),
+                Mode::_2 => n_to_1::<4>(args, &img, tile_size, crop),
+                Mode::_3 => n_to_1::<9>(args, &img, tile_size, crop),
+                Mode::_4 => n_to_1::<16>(args, &img, tile_size, crop),
+                Mode::_5 => n_to_1::<25>(args, &img, tile_size, crop),
+                Mode::_6 => n_to_1::<36>(args, &img, tile_size, crop),
+                Mode::_8 => n_to_1::<64>(args, &img, tile_size, crop),
+                Mode::_16 => n_to_1::<256>(args, &img, tile_size, crop),
+                Mode::_32 => n_to_1::<1024>(args, &img, tile_size, crop),
+                Mode::_64 => n_to_1::<4096>(args, &img, tile_size, crop),
+                Mode::_128 => n_to_1::<16384>(args, &img, tile_size, crop),
                 Mode::Random => {
                     let images = find_images(&args.tiles_dir, |ext| {
                         args.extensions.contains(&ext.to_string_lossy().to_string())
@@ -236,6 +241,7 @@ fn n_to_1<const N: usize>(
     }: Mosaic,
     original_img: &image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
     tile_size: u32,
+    crop: bool,
 ) -> image::ImageBuffer<image::Rgb<u8>, Vec<u8>>
 where
     [(); N * 3]:,
@@ -260,11 +266,21 @@ where
         nheight -= nheight_mod
     }
 
-    eprintln!("Resizing source image to {}x{}", nwidth, nheight);
+    eprintln!(
+        "Resizing source image from {}x{} to {}x{}",
+        original_img.width(),
+        original_img.height(),
+        nwidth,
+        nheight
+    );
 
     let img = imageops::resize(original_img, nwidth, nheight, image::FilterType::Lanczos3);
 
-    let analysis_cache_path = tiles_dir.join(format!(".emosaic_{}to1", N));
+    let analysis_cache_path = tiles_dir.join(format!(
+        ".emosaic_{}to1{}",
+        N,
+        if crop { "_cropped" } else { "" }
+    ));
     // Validate the source image dimensions
     if img.width() % dim != 0 || img.height() % dim != 0 {
         eprintln!(
@@ -282,8 +298,9 @@ where
     if force {
         fs::remove_file(&analysis_cache_path).ok();
     }
-    let tile_set: TileSet<[Rgb<u8>; N]> = fs::read(&analysis_cache_path).ok().and_then(
-        |bytes| {
+    let tile_set: TileSet<[Rgb<u8>; N]> = fs::read(&analysis_cache_path)
+        .ok()
+        .and_then(|bytes| {
             let analysis: TileSet<[Rgb<u8>; N]> = bincode::deserialize(&bytes).unwrap();
             // validate the analysis: check that all the paths exist
             let is_valid = analysis
@@ -297,10 +314,11 @@ where
                 eprintln!("Found missing files, regenerating analysis cache");
                 None
             }
-        }).unwrap_or_else(|| {
+        })
+        .unwrap_or_else(|| {
             let extensions = extensions.into_iter().map(OsString::from).collect();
             let tile_set =
-                generate_tile_set(&tiles_dir, tile_size, _Nto1::<N>(), extensions).unwrap();
+                generate_tile_set(&tiles_dir, tile_size, _Nto1::<N>(), extensions, crop).unwrap();
             let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
             fs::write(analysis_cache_path, encoded_tile_set).unwrap();
             tile_set
@@ -321,6 +339,7 @@ fn generate_tile_set<T>(
     tile_size: u32,
     analysis: impl AnalyseTiles<T>,
     extensions: HashSet<OsString>,
+    crop: bool,
 ) -> io::Result<TileSet<T>>
 where
     TileSet<T>: Serialize,
@@ -339,7 +358,7 @@ where
     let images = images_paths
         .into_par_iter()
         .map(|path| {
-            let img = prepare_tile(&path, tile_size);
+            let img = prepare_tile(&path, tile_size, crop);
             (path, img)
         })
         .inspect(move |_| pb.inc(1))
