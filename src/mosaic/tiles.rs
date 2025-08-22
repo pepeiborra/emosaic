@@ -104,6 +104,7 @@ impl<T> Tile<T> {
 }
 
 impl<const N: usize> Tile<[Rgb<u8>; N]> {
+    /// Convert the tile into a vectorial space
     pub fn coords(&self) -> [SIZE; N * 3] {
         let mut result = [0u8.into(); N * 3];
         for i in 0..N {
