@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::sync::{Mutex, RwLock};
 
 use error::ImageError;
+use fixed::FixedU32;
 use ::image::{imageops, Rgb};
 use ::image::RgbImage;
 use color::average_color;
@@ -18,8 +19,9 @@ use kiddo::NearestNeighbour;
 use rand::prelude::IteratorRandom;
 use rand::prelude::SliceRandom;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use stats::Stats;
+use stats::RenderStats;
 use tiles::{flipped_coords, Tile, TileSet};
+use typenum::U0;
 
 pub fn render<'a>(
     source_img: &'a RgbImage,
@@ -80,11 +82,11 @@ pub fn render_nto1<const N: usize>(
     tile_size: u32,
     no_repeat: bool,
     randomize: Option<f64>,
-) -> RgbImage
+) -> RenderResult
 where
     [(); N * 3]:,
 {
-    let stats = Mutex::new(Stats::new());
+    let stats = Mutex::new(RenderStats::new());
 
     let kdtree = RwLock::new(tile_set.build_kiddo());
 
@@ -104,7 +106,7 @@ where
         panic!("Error: not enough tiles to fill the image without repeating");
     }
 
-    let res = render(source_img, tile_size, step, |x, y| {
+    let image = render(source_img, tile_size, step, |x, y| {
         let colors = get_img_colors(x, y, step, source_img);
         let mut tile = Tile::from_colors(colors);
         let closest: NearestNeighbour<_, _>;
@@ -145,8 +147,7 @@ where
             }
             assert!(
                 closest.item != 0,
-                "tile: {:?}, closest: {:?}",
-                colors,
+                "Closest item should not be zero. Did you use FixedU8? closest: {:?}",
                 closest
             );
             tile = tile_set
@@ -156,28 +157,36 @@ where
                 writer.unwrap().remove(&tile.coords(), closest.item);
             }
         }
-        stats.lock().unwrap().push_tile(&tile);
+        stats.lock().unwrap().push_tile(&tile, closest.distance);
         tile_set.get_image(&tile, tile_size).expect(&format!(
             "Image not found: {}",
             tile_set.get_path(&tile).to_str().unwrap()
         ))
     });
 
-    stats.into_inner().unwrap().summarise(&tile_set);
+    let stats = stats.into_inner().unwrap();
+    stats.summarise(&tile_set);
 
-    res
+    RenderResult {
+        image,
+        stats: stats,
+    }
 }
 
+pub(crate) struct RenderResult {
+    pub(crate) image: RgbImage,
+    pub(crate) stats: RenderStats<FixedU32<U0>>
+}
 
 pub fn render_nto1_no_repeat<const N: usize>(
     source_img: &RgbImage,
     tile_set: TileSet<[Rgb<u8>; N]>,
     tile_size: u32,
-) -> Result<RgbImage, ImageError>
+) -> Result<RenderResult, ImageError>
 where
     [(); N * 3]:,
 {
-    let stats = Mutex::new(Stats::new());
+    let stats = Mutex::new(RenderStats::new());
 
     eprintln!("Building kdtree");
     let kdtree = RwLock::new(tile_set.build_kiddo());
@@ -231,7 +240,7 @@ where
     // sort matches by nearest score, reversed as we pop from the end
     matches.sort_unstable_by(|(_, a), (_, b)| compare_matches(a, b));
 
-    let mut res = RgbImage::new(
+    let mut image = RgbImage::new(
         source_img.width() * tile_size_stepped,
         source_img.height() * tile_size_stepped,
     );
@@ -250,7 +259,8 @@ where
 
     // select tiles by nearest order, removing as we go
     while let Some((n, mut nearest)) = matches.pop() {
-        let item = nearest.pop().unwrap().item;
+        let nearest_item = nearest.pop().unwrap();
+        let item = nearest_item.item;
         if used.insert(item) {
             used.insert(-item);
             let tile = tile_set.get_tile(item).unwrap();
@@ -258,8 +268,8 @@ where
             let tile_x = (n as u32 / vtiles) * tile_size;
             let tile_y = (n as u32 % vtiles) * tile_size;
             // eprintln!("n={n}, tile_x={tile_x}, tile_y={tile_y}");
-            imageops::overlay(&mut res, &tile_img, tile_x.into(), tile_y.into());
-            stats.lock().unwrap().push_tile(&tile);
+            imageops::overlay(&mut image, &tile_img, tile_x.into(), tile_y.into());
+            stats.lock().unwrap().push_tile(&tile, nearest_item.distance);
             let mut tree = kdtree.write().unwrap();
             let mut coords = tile.coords();
             // eprintln!("Removing tile {}", item);
@@ -279,9 +289,10 @@ where
         }
     }
 
-    stats.into_inner().unwrap().summarise(&tile_set);
+    let stats = stats.into_inner().unwrap();
+    stats.summarise(&tile_set);
 
-    Ok(res)
+    Ok(RenderResult{image, stats})
 }
 
 fn compare_matches<B: Ord, C>(
@@ -396,8 +407,8 @@ mod tests {
         tile_set.push_tile_with_image(PathBuf::new(), [Rgb([0, 0, 0]); 1], RgbImage::new(8, 8));
         let tile_size = 8;
         let output = render_nto1(&source_img, tile_set, tile_size, false, None);
-        assert_eq!(output.width(), source_img.width() * tile_size);
-        assert_eq!(output.height(), source_img.height() * tile_size);
+        assert_eq!(output.image.width(), source_img.width() * tile_size);
+        assert_eq!(output.image.height(), source_img.height() * tile_size);
     }
 
     #[test]
@@ -447,12 +458,12 @@ mod tests {
         for img in universe.iter() {
             let rendered_img = render_nto1(&img, tile_set.clone(), dim, false, None);
             assert_eq!(
-                rendered_img.into_iter().collect::<Vec<_>>(),
+                rendered_img.image.into_iter().collect::<Vec<_>>(),
                 img.into_iter().collect::<Vec<_>>()
             );
             let rendered_img = render_nto1_no_repeat(&img, tile_set.clone(), dim).unwrap();
             assert_eq!(
-                rendered_img.into_iter().collect::<Vec<_>>(),
+                rendered_img.image.into_iter().collect::<Vec<_>>(),
                 img.into_iter().collect::<Vec<_>>()
             );
         }
@@ -465,12 +476,12 @@ mod tests {
             }
             let rendered_img = render_nto1(&img, tile_set.clone(), dim, false, None);
             assert_eq!(
-                rendered_img.into_iter().collect::<Vec<_>>(),
+                rendered_img.image.into_iter().collect::<Vec<_>>(),
                 img.into_iter().collect::<Vec<_>>()
             );
             let rendered_img = render_nto1_no_repeat(&img, tile_set.clone(), dim).unwrap();
             assert_eq!(
-                rendered_img.into_iter().collect::<Vec<_>>(),
+                rendered_img.image.into_iter().collect::<Vec<_>>(),
                 img.into_iter().collect::<Vec<_>>()
             );
         }

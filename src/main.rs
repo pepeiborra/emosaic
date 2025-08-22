@@ -87,6 +87,10 @@ struct Mosaic {
     #[clap(long, default_values_t = [String::from("jpg"), String::from("jpeg")])]
     /// Extensions of image files in the tiles dir
     extensions: Vec<String>,
+
+    #[clap(long)]
+    /// When combined with no-repeat, uses a less accurate but faster algorithm
+    greedy: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -244,6 +248,7 @@ fn n_to_1<const N: usize>(
         downsample,
         randomize,
         tiles_dir,
+        greedy,
         ..
     }: Mosaic,
     original_img: &image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
@@ -332,11 +337,12 @@ where
             tile_set
         });
     eprintln!("Tile set with {} tiles", tile_set.len());
-    if no_repeat {
+    let result = if no_repeat && !greedy {
         render_nto1_no_repeat(&img, tile_set, tile_size)
     } else {
         Ok(render_nto1(&img, tile_set, tile_size, no_repeat, randomize))
-    }
+    };
+    result.map(|result| result.image)
 }
 
 fn generate_tile_set<const N: usize>(
