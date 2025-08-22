@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use self::color::IntoSerializableRgb;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize)]
 pub struct Tile<T> {
     path_buf: PathBuf,
     colors: T,
@@ -64,7 +64,7 @@ impl kd_tree::KdPoint for Tile<SerializableRgb> {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize)]
 pub struct TileSet<T> {
     tiles: Vec<Tile<T>>,
 }
@@ -91,7 +91,7 @@ impl<T> TileSet<T> {
 
 pub fn render_1to1(
     source_img: &RgbImage,
-    tile_set: &TileSet<SerializableRgb>,
+    tile_set: TileSet<SerializableRgb>,
     tile_size: u32,
 ) -> RgbImage {
     let mut output = RgbImage::new(
@@ -104,7 +104,7 @@ pub fn render_1to1(
 
     // Create kd-tree
     let kdtree: kd_tree::KdTree<Tile<SerializableRgb>> =
-        kd_tree::KdTree::build_by_ordered_float(tile_set.tiles.clone());
+        kd_tree::KdTree::build_by_ordered_float(tile_set.tiles);
 
     for y in 0..source_img.height() {
         for x in 0..source_img.width() {
@@ -139,7 +139,7 @@ pub fn render_1to1(
 
 pub fn render_4to1(
     source_img: &RgbImage,
-    tile_set: &TileSet<[SerializableRgb; 4]>,
+    tile_set: TileSet<[SerializableRgb; 4]>,
     tile_size: u32,
 ) -> RgbImage {
     let tile_size_halved = tile_size / 2;
@@ -154,7 +154,7 @@ pub fn render_4to1(
 
     // Create kd-tree
     let kdtree: kd_tree::KdTree<Tile<[SerializableRgb; 4]>> =
-        kd_tree::KdTree::build_by_ordered_float(tile_set.tiles.clone());
+        kd_tree::KdTree::build_by_ordered_float(tile_set.tiles);
 
     for y in (0..source_img.height()).step_by(2) {
         for x in (0..source_img.width()).step_by(2) {
@@ -205,7 +205,7 @@ pub fn render_4to1(
     output
 }
 
-pub fn render_random(source_img: &RgbImage, tile_set: &TileSet<()>, tile_size: u32) -> RgbImage {
+pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u32) -> RgbImage {
     let mut output = RgbImage::new(
         source_img.width() * tile_size,
         source_img.height() * tile_size,

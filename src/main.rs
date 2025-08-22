@@ -167,7 +167,7 @@ fn main() {
                 _ => generate_tile_set(tiles_path, &analysis_cache_path, _1to1(), extensions).unwrap(),
             };
             eprintln!("Tile set with {} tiles", tile_set.len());
-            render_1to1(&img, &tile_set, tile_size)
+            render_1to1(&img, tile_set, tile_size)
         }
         Mode::FourToOne => {
             let analysis_cache_path = tiles_path.join(".emosaic_4to1");
@@ -182,7 +182,7 @@ fn main() {
                 _ => generate_tile_set(tiles_path, &analysis_cache_path, _4to1(), extensions).unwrap(),
             };
             eprintln!("Tile set with {} tiles", tile_set.len());
-            render_4to1(&img, &tile_set, tile_size)
+            render_4to1(&img, tile_set, tile_size)
         }
         Mode::Random => {
             let images = read_images_in_dir(tiles_path);
@@ -192,7 +192,7 @@ fn main() {
                 tile_set.push(tile);
             }
             eprintln!("Tile set with {} tiles", tile_set.len());
-            render_random(&img, &tile_set, tile_size)
+            render_random(&img, tile_set, tile_size)
         }
     };
 
