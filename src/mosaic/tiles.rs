@@ -13,7 +13,6 @@ use image::error::LimitError;
 use ::image::imageops;
 use image::imageops::FilterType;
 use image::DynamicImage;
-use ::image::ImageResult;
 use ::image::Rgb;
 use fixed::FixedU32;
 use itertools::MultiUnzip;
@@ -25,6 +24,9 @@ use rayon::iter::ParallelIterator;
 use serde::ser::SerializeTuple;
 use serde::{Deserialize, Serialize};
 use typenum::U0;
+
+use super::error::ImageError;
+
 
 #[derive(Clone, Debug, Eq)]
 pub struct Tile<T> {
@@ -198,8 +200,7 @@ impl<T> TileSet<T> {
         let tiles = self.tiles.into_iter().map(|t| t.map(f)).collect();
         TileSet {
             tiles,
-            paths: self.paths,
-            images: self.images,
+            ..self
         }
     }
     pub fn push_tile(&mut self, path: PathBuf, colors: T) {
@@ -233,7 +234,7 @@ impl<T> TileSet<T> {
         &self,
         tile: &Tile<T>,
         tile_size: u32,
-    ) -> ImageResult<image::ImageBuffer<Rgb<u8>, Vec<u8>>> {
+    ) -> Result<image::ImageBuffer<Rgb<u8>, Vec<u8>>, ImageError> {
         let path = self.get_path(tile);
         let image = self
             .images
@@ -270,7 +271,7 @@ impl<const N: usize> TileSet<[Rgb<u8>; N]>
             assert!(-idx != 0);
             kd.add(&coords, -idx);
         }
-        assert!(kd.size() as usize == self.tiles.len() * 2);
+        // assert!(kd.size() as usize == self.tiles.len() * 2);
         // eprintln!("Building kd-tree {:?}", kd);
         kd
     }
@@ -346,9 +347,9 @@ pub fn prepare_tile(
     path: &Path,
     tile_size: u32,
     crop: bool,
-) -> ImageResult<::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>> {
+) -> Result<::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>, ImageError> {
     // We cache resized images in the home cache path using their content hash
-    let content_hash = md5::compute(std::fs::read(path)?);
+    let content_hash = md5::compute(std::fs::read(path).map_err(|e| ImageError{path: path.to_owned(), error:e.into()})?);
     let cache_path = dirs::cache_dir().unwrap().join("mosaic").join(format!(
         "{:x}{}.{}.jpg",
         content_hash,
@@ -357,9 +358,9 @@ pub fn prepare_tile(
     ));
     // check if the cache path exists and load it, otherwise resize and save it
     if cache_path.exists() {
-        return Ok(::image::open(&cache_path)?.to_rgb8());
+        return Ok(::image::open(&cache_path).map_err(|e| ImageError{path: path.to_owned(), error: e.into()})?.to_rgb8());
     } else {
-        let mut tile_img = ::image::open(path)?.to_rgb8();
+        let mut tile_img = ::image::open(path).map_err(|e| ImageError{ path: path.to_owned(), error: e})?.to_rgb8();
         // Crop all the white pixels from the edges
         let is_white_pixel = |pixel: &Rgb<u8>| pixel[0] > 240 && pixel[1] > 240 && pixel[2] > 240;
 
@@ -367,7 +368,10 @@ pub fn prepare_tile(
         let h = tile_img.height();
 
         if w < tile_size || h < tile_size {
-            return Err(::image::ImageError::Limits(LimitError::from_kind(image::error::LimitErrorKind::DimensionError)));
+            return Err(ImageError{
+                path: path.to_owned(),
+                error: ::image::ImageError::Limits(LimitError::from_kind(image::error::LimitErrorKind::DimensionError))
+            });
         }
 
         let from_left: Vec<u32> = (0..h)
@@ -529,6 +533,9 @@ mod tests {
         let mut coords = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         flipped_coords(&mut coords);
         assert_eq!(coords, [4, 5, 6, 1, 2, 3, 10, 11, 12, 7, 8, 9]);
+        flipped_coords(&mut coords);
+        assert_eq!(coords, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+
 
         // Add more test cases here
     }

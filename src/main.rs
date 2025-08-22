@@ -4,7 +4,7 @@
 mod mosaic;
 
 use image::imageops::FilterType;
-use derive_more::Display;
+use mosaic::error::ImageError;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::create_dir_all;
@@ -13,7 +13,7 @@ use std::sync::RwLock;
 use std::{fs, io};
 
 use clap::{self, Args, Parser, Subcommand, ValueEnum};
-use image::{imageops, DynamicImage, ImageFormat, ImageResult, Rgb, Rgba, RgbaImage};
+use image::{imageops, DynamicImage, ImageFormat, Rgb, Rgba, RgbaImage};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
@@ -134,6 +134,8 @@ fn is_percentage(s: &str) -> Result<f64, String> {
     Err(String::from("Value must be between 0 and 100"))
 }
 fn main() {
+    unsafe { backtrace_on_stack_overflow::enable() };
+
     let cli = Cli::parse();
 
     let Cli {
@@ -187,8 +189,13 @@ fn main() {
                         args.extensions.contains(&ext.to_string_lossy().to_string())
                     });
                     let mut tile_set = TileSet::<()>::new();
+                    let extensions : HashSet<String> = args.extensions.iter().map(|x| x.to_owned()).collect();
                     for path_buf in images.unwrap() {
-                        tile_set.push_tile(path_buf, ());
+                        if let Some(ext) = path_buf.extension() {
+                            if extensions.contains(ext.to_str().unwrap()) && path_buf.exists() {
+                                tile_set.push_tile(path_buf, ());
+                            }
+                        }
                     }
                     eprintln!("Tile set with {} tiles", tile_set.len());
                     Ok(render_random(&img, tile_set, tile_size))
@@ -242,7 +249,7 @@ fn n_to_1<const N: usize>(
     original_img: &image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
     tile_size: u32,
     crop: bool,
-) -> ImageResult<image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>
+) -> Result<image::ImageBuffer<image::Rgb<u8>, Vec<u8>>, ImageError>
 where
     [(); N * 3]:,
 {
@@ -295,28 +302,29 @@ where
         eprintln!("Invalid tile size: Tile size must be divisible by {}", dim);
         std::process::exit(1);
     }
-    if force {
-        fs::remove_file(&analysis_cache_path).ok();
-    }
-    let tile_set: TileSet<[Rgb<u8>; N]> = fs::read(&analysis_cache_path)
-        .ok()
-        .and_then(|bytes| {
+    let extensions : HashSet<_> = extensions.iter().map(|x| x.to_owned()).collect();
+    let tile_set = if force {None} else {fs::read(&analysis_cache_path).ok()};
+    let tile_set: TileSet<[Rgb<u8>; N]> =
+        tile_set
+        .map(|bytes| {
             let analysis: TileSet<[Rgb<u8>; N]> = bincode::deserialize(&bytes).unwrap();
             // validate the analysis: check that all the paths exist
-            let is_valid = analysis
+            eprintln!("Reusing analysis cache");
+            analysis
                 .tiles
                 .par_iter()
-                .all(|tile| analysis.get_path(tile).exists());
-            if is_valid {
-                eprintln!("Reusing analysis cache");
-                Some(analysis)
-            } else {
-                eprintln!("Found missing files, regenerating analysis cache");
-                None
-            }
+                .filter_map(|tile| {
+                    let path = analysis.get_path(tile);
+                    let extension = path.extension().unwrap().to_str().unwrap();
+                    if path.exists() && extensions.contains(extension) {
+                        Some((path.to_owned(), tile.colors))
+                    } else {
+                        None
+                    }
+                    }).collect()
         })
         .unwrap_or_else(|| {
-            let extensions = extensions.into_iter().map(OsString::from).collect();
+            let extensions = extensions.iter().map(OsString::from).collect();
             let tile_set =
                 generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop).unwrap();
             let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
@@ -329,13 +337,6 @@ where
     } else {
         Ok(render_nto1(&img, tile_set, tile_size, no_repeat, randomize))
     }
-}
-
-#[derive(Debug, Display)]
-#[display(fmt = "{:?}: {}", path, error)]
-struct ImageError {
-    path: PathBuf,
-    error: image::ImageError,
 }
 
 fn generate_tile_set<const N: usize>(
@@ -369,10 +370,7 @@ where
             (path, Ok(x)) => Some((path, analyse::<N>(x))),
             (path, Err(error)) => {
                 let path = path.strip_prefix(tiles_path).unwrap();
-                errors.write().unwrap().push(ImageError {
-                    path: path.to_owned(),
-                    error,
-                });
+                errors.write().unwrap().push(ImageError{path: path.to_owned(), ..error});
                 None
             }
         }).collect();

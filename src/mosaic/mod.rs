@@ -1,4 +1,5 @@
 pub mod color;
+pub mod error;
 pub mod image;
 pub mod stats;
 pub mod tiles;
@@ -6,8 +7,9 @@ pub mod tiles;
 use std::collections::HashSet;
 use std::sync::{Mutex, RwLock};
 
+use error::ImageError;
 use ::image::{imageops, Rgb};
-use ::image::{ImageResult, RgbImage};
+use ::image::RgbImage;
 use color::average_color;
 use fixed::traits::FromFixed;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -166,17 +168,20 @@ where
     res
 }
 
+
 pub fn render_nto1_no_repeat<const N: usize>(
     source_img: &RgbImage,
     tile_set: TileSet<[Rgb<u8>; N]>,
     tile_size: u32,
-) -> ImageResult<RgbImage>
+) -> Result<RgbImage, ImageError>
 where
     [(); N * 3]:,
 {
     let stats = Mutex::new(Stats::new());
 
+    eprintln!("Building kdtree");
     let kdtree = RwLock::new(tile_set.build_kiddo());
+    eprintln!("Built kdtree");
 
     let step = (N as f64).sqrt() as u32;
 
@@ -247,6 +252,7 @@ where
     while let Some((n, mut nearest)) = matches.pop() {
         let item = nearest.pop().unwrap().item;
         if used.insert(item) {
+            used.insert(-item);
             let tile = tile_set.get_tile(item).unwrap();
             let tile_img = tile_set.get_image(&tile, tile_size)?;
             let tile_x = (n as u32 / vtiles) * tile_size;
@@ -256,9 +262,10 @@ where
             stats.lock().unwrap().push_tile(&tile);
             let mut tree = kdtree.write().unwrap();
             let mut coords = tile.coords();
-            tree.remove(&coords, item);
+            // eprintln!("Removing tile {}", item);
+            assert!(tree.remove(&coords, item) > 0, "item: {:?}, tile: {:?}", item, tile.flipped);
             flipped_coords(&mut coords);
-            tree.remove(&coords, -item);
+            assert!(tree.remove(&coords, -item) > 0, "item: {:?}, tile: {:?}", item, tile.flipped);
             pb.inc(1);
         } else {
             if nearest.is_empty() {
@@ -435,6 +442,7 @@ mod tests {
             .par_iter()
             .map(|img| (PathBuf::new(), img.clone(), analyse::<N>(img.clone())))
             .collect();
+
 
         for img in universe.iter() {
             let rendered_img = render_nto1(&img, tile_set.clone(), dim, false, None);
