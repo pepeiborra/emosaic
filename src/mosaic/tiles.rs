@@ -357,9 +357,10 @@ pub fn prepare_tile(
         tile_size
     ));
     // check if the cache path exists and load it, otherwise resize and save it
-    if cache_path.exists() {
-        return Ok(::image::open(&cache_path).map_err(|e| ImageError{path: path.to_owned(), error: e.into()})?.to_rgb8());
-    } else {
+    let cached_img : Result<::image::ImageBuffer<_,_>, _> = ::image::open(&cache_path)
+        .map_err( |e| ImageError{path:path.to_owned(), error:e})
+        .map(|img| img.to_rgb8());
+    cached_img.or_else(|_| {
         let mut tile_img = ::image::open(path).map_err(|e| ImageError{ path: path.to_owned(), error: e})?.to_rgb8();
         // Crop all the white pixels from the edges
         let is_white_pixel = |pixel: &Rgb<u8>| pixel[0] > 240 && pixel[1] > 240 && pixel[2] > 240;
@@ -455,7 +456,7 @@ pub fn prepare_tile(
         let tile_img = rotate(tile_img.into(), orientation);
         tile_img.save(cache_path).unwrap();
         Ok(tile_img.into())
-    }
+    })
 }
 
 fn get_jpeg_orientation(file_path: &Path) -> Result<u32, exif::Error> {
