@@ -12,12 +12,12 @@ use std::sync::RwLock;
 use std::{fs, io};
 
 use clap::{self, Args, Parser, Subcommand, ValueEnum};
-use image::{imageops, DynamicImage, ImageFormat, Rgb, Rgba, RgbaImage};
+use image::{imageops, DynamicImage, ImageFormat, ImageResult, Rgb, Rgba, RgbaImage};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
 use mosaic::tiles::{prepare_tile, TileSet};
-use mosaic::{analyse, render_nto1, render_random};
+use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
 #[derive(Parser)]
@@ -190,9 +190,9 @@ fn main() {
                         tile_set.push_tile(path_buf, ());
                     }
                     eprintln!("Tile set with {} tiles", tile_set.len());
-                    render_random(&img, tile_set, tile_size)
+                    Ok(render_random(&img, tile_set, tile_size))
                 }
-            };
+            }.unwrap();
 
             if tint_opacity > 0.0 {
                 let mut overlay = RgbaImage::new(img.width(), img.height());
@@ -240,7 +240,7 @@ fn n_to_1<const N: usize>(
     original_img: &image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
     tile_size: u32,
     crop: bool,
-) -> image::ImageBuffer<image::Rgb<u8>, Vec<u8>>
+) -> ImageResult<image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>
 where
     [(); N * 3]:,
 {
@@ -322,7 +322,11 @@ where
             tile_set
         });
     eprintln!("Tile set with {} tiles", tile_set.len());
-    render_nto1(&img, tile_set, tile_size, no_repeat, randomize)
+    if no_repeat {
+        render_nto1_no_repeat(&img, tile_set, tile_size)
+    } else {
+        Ok(render_nto1(&img, tile_set, tile_size, no_repeat, randomize))
+    }
 }
 
 #[derive(Debug, Display)]

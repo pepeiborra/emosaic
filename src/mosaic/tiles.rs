@@ -99,10 +99,12 @@ impl<T> Tile<T> {
 impl<const N: usize> Tile<[Rgb<u8>; N]> {
     pub fn coords(&self) -> [FixedU32<U0>; N * 3] {
         let mut result = [0u8.into(); N * 3];
-        for i in 0..N * 3 {
-            let color = self.colors[i / 3];
-            let coord = color[i % 3].into();
-            result[i] = coord;
+        for i in 0..N {
+            let color = self.colors[i];
+            let i3 = i*3;
+            result[i3] = color[0].into();
+            result[i3 + 1] = color[1].into();
+            result[i3 + 2] = color[2].into();
         }
         if self.flipped {
             flipped_coords(&mut result);
