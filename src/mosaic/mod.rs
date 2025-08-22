@@ -8,7 +8,6 @@ use std::collections::HashSet;
 use std::sync::{Mutex, RwLock};
 
 use error::ImageError;
-use fixed::FixedU32;
 use ::image::{imageops, Rgb};
 use ::image::RgbImage;
 use color::average_color;
@@ -21,7 +20,6 @@ use rand::prelude::SliceRandom;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use stats::RenderStats;
 use tiles::{flipped_coords, Tile, TileSet};
-use typenum::U0;
 
 pub fn render<'a>(
     source_img: &'a RgbImage,
@@ -175,7 +173,7 @@ where
 
 pub(crate) struct RenderResult {
     pub(crate) image: RgbImage,
-    pub(crate) stats: RenderStats<FixedU32<U0>>
+    pub(crate) stats: RenderStats<tiles::SIZE>
 }
 
 pub fn render_nto1_no_repeat<const N: usize>(

@@ -11,8 +11,8 @@ pub struct RenderStats<D> {
 impl<D> RenderStats<D>
 where
     f64: From<D>,
-    D: From<u32>,
-    D: std::cmp::Ord,
+    // D: From<u32>,
+    D: std::cmp::Ord + std::ops::Sub<Output = D>,
     D: std::ops::AddAssign,
     D: Copy,
     D: std::fmt::Display {
@@ -27,7 +27,7 @@ where
         self.tiles.push(t);
     }
     pub fn summarise<T>(&self, tile_set: &TileSet<T>) {
-        let mut total_distance : D = 0.into();
+        let mut total_distance : D = self.tiles[0].colors - self.tiles[0].colors;
         let mut paths_count: HashMap<_, u16> = HashMap::with_capacity(self.tiles.len());
         for t in self.tiles.iter() {
             total_distance += t.colors;

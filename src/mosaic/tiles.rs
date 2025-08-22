@@ -14,7 +14,6 @@ use ::image::imageops;
 use image::imageops::FilterType;
 use image::DynamicImage;
 use ::image::Rgb;
-use fixed::FixedU32;
 use itertools::MultiUnzip;
 use num_integer::Roots;
 use rand::prelude::*;
@@ -27,6 +26,7 @@ use typenum::U0;
 
 use super::error::ImageError;
 
+pub(crate) type SIZE = fixed::FixedU32<U0>;
 
 #[derive(Clone, Debug, Eq)]
 pub struct Tile<T> {
@@ -104,7 +104,7 @@ impl<T> Tile<T> {
 }
 
 impl<const N: usize> Tile<[Rgb<u8>; N]> {
-    pub fn coords(&self) -> [FixedU32<U0>; N * 3] {
+    pub fn coords(&self) -> [SIZE; N * 3] {
         let mut result = [0u8.into(); N * 3];
         for i in 0..N {
             let color = self.colors[i];
@@ -260,7 +260,7 @@ impl<const N: usize> TileSet<[Rgb<u8>; N]>
 {
     pub fn build_kiddo(
         &self,
-    ) -> kiddo::fixed::kdtree::KdTree<FixedU32<U0>, i16, { N * 3 }, 640, u16> {
+    ) -> kiddo::fixed::kdtree::KdTree<SIZE, i16, { N * 3 }, 640, u16> {
         let mut kd = kiddo::fixed::kdtree::KdTree::new();
         for tile in self.tiles.iter() {
             let mut coords = tile.coords();
