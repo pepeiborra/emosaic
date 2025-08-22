@@ -17,7 +17,7 @@ use rand::prelude::IteratorRandom;
 use rand::prelude::SliceRandom;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use stats::Stats;
-use tiles::{Tile, TileSet};
+use tiles::{flipped_coords, Tile, TileSet};
 
 pub fn render<'a>(
     source_img: &'a RgbImage,
@@ -54,7 +54,7 @@ pub fn render<'a>(
                 let tile_x = x * tile_size_stepped;
                 let tile_y = 0;
 
-                imageops::replace(&mut image, &tile_img, tile_x, tile_y);
+                imageops::replace(&mut image, &tile_img, tile_x.into(), tile_y.into());
             }
             image
         })
@@ -67,7 +67,7 @@ pub fn render<'a>(
     let pb = ProgressBar::new((source_img.height() / step as u32) as u64).with_message("Merging");
     for (i, segment) in segments.into_iter().enumerate() {
         pb.inc(1);
-        imageops::replace(&mut output, &segment, 0, i as u32 * tile_size);
+        imageops::replace(&mut output, &segment, 0, i as i64 * tile_size as i64);
     }
     output
 }
@@ -252,9 +252,13 @@ where
             let tile_x = (n as u32 / vtiles) * tile_size;
             let tile_y = (n as u32 % vtiles) * tile_size;
             // eprintln!("n={n}, tile_x={tile_x}, tile_y={tile_y}");
-            imageops::overlay(&mut res, &tile_img, tile_x, tile_y);
+            imageops::overlay(&mut res, &tile_img, tile_x.into(), tile_y.into());
             stats.lock().unwrap().push_tile(&tile);
-            kdtree.write().unwrap().remove(&tile.coords(), item);
+            let mut tree = kdtree.write().unwrap();
+            let mut coords = tile.coords();
+            tree.remove(&coords, item);
+            flipped_coords(&mut coords);
+            tree.remove(&coords, -item);
             pb.inc(1);
         } else {
             if nearest.is_empty() {
@@ -311,8 +315,8 @@ pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u3
                 &tile_set
                     .get_image(&tile_set.random_tile(), tile_size)
                     .expect("Image not found"),
-                tile_x * tile_size,
-                tile_y * tile_size,
+                (tile_x * tile_size).into(),
+                (tile_y * tile_size).into(),
             );
         }
     }
@@ -449,7 +453,7 @@ mod tests {
         for tiles in &universe.iter().chunks(2) {
             let mut img = RgbImage::new(dim, 2*dim);
             for (i, tile) in tiles.enumerate() {
-                imageops::overlay(&mut img, tile, 0, i as u32 * dim);
+                imageops::overlay(&mut img, tile, 0, i as i64 * dim as i64);
             }
             let rendered_img = render_nto1(&img, tile_set.clone(), dim, false, None);
             assert_eq!(

@@ -3,11 +3,16 @@ use std::convert::TryInto;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::iter::FromIterator;
+use std::ops::Deref;
 use std::ops::Div;
 use std::path::{Path, PathBuf};
 
+use exif::In;
+use exif::Tag;
+use image::error::LimitError;
 use ::image::imageops;
-use ::image::FilterType;
+use image::imageops::FilterType;
+use image::DynamicImage;
 use ::image::ImageResult;
 use ::image::Rgb;
 use fixed::FixedU32;
@@ -271,7 +276,7 @@ impl<const N: usize> TileSet<[Rgb<u8>; N]>
     }
 }
 
-fn flipped_coords<A, const N: usize>(coords: &mut [A; N]) {
+pub(crate) fn flipped_coords<A, const N: usize>(coords: &mut [A; N]) {
     // coords is a flattened array of pixel rows for a square image.
     // The first 3 items correspond to the first pixel of the first row, the next 3 to the second pixel, etc.
     // In total there are N/3 pixels and sqrt(N/3) rows
@@ -352,9 +357,9 @@ pub fn prepare_tile(
     ));
     // check if the cache path exists and load it, otherwise resize and save it
     if cache_path.exists() {
-        return Ok(::image::open(&cache_path)?.to_rgb());
+        return Ok(::image::open(&cache_path)?.to_rgb8());
     } else {
-        let mut tile_img = ::image::open(path)?.to_rgb();
+        let mut tile_img = ::image::open(path)?.to_rgb8();
         // Crop all the white pixels from the edges
         let is_white_pixel = |pixel: &Rgb<u8>| pixel[0] > 240 && pixel[1] > 240 && pixel[2] > 240;
 
@@ -362,7 +367,7 @@ pub fn prepare_tile(
         let h = tile_img.height();
 
         if w < tile_size || h < tile_size {
-            return Err(::image::ImageError::DimensionError);
+            return Err(::image::ImageError::Limits(LimitError::from_kind(image::error::LimitErrorKind::DimensionError)));
         }
 
         let from_left: Vec<u32> = (0..h)
@@ -441,11 +446,48 @@ pub fn prepare_tile(
             tile_img.change_bounds(x0, y0, size, size);
         }
 
-        let tile_img = imageops::resize(&tile_img, tile_size, tile_size, FilterType::Lanczos3);
+        let tile_img = imageops::resize(tile_img.deref(), tile_size, tile_size, FilterType::Lanczos3);
+        let orientation  = get_jpeg_orientation(path).unwrap_or(1);
+        let tile_img = rotate(tile_img.into(), orientation);
         tile_img.save(cache_path).unwrap();
-        Ok(tile_img)
+        Ok(tile_img.into())
     }
 }
+
+fn get_jpeg_orientation(file_path: &Path) -> Result<u32, exif::Error> {
+    let file = std::fs::File::open(file_path).expect("problem opening the file");
+    let mut bufreader = std::io::BufReader::new(&file);
+    let exifreader = exif::Reader::new();
+    let exif = exifreader
+      .read_from_container(&mut bufreader)?;
+    let orientation: u32 = match exif.get_field(Tag::Orientation, In::PRIMARY) {
+      Some(orientation) => match orientation.value.get_uint(0) {
+        Some(v @ 1..=8) => v,
+        _ => 1,
+      },
+      None => 1,
+    };
+
+    Ok(orientation)
+  }
+
+fn rotate(mut img: DynamicImage, orientation: u32) -> DynamicImage {
+    let rgba = img.color().has_alpha();
+    img = match orientation {
+      2 => DynamicImage::ImageRgba8(imageops::flip_horizontal(&img)),
+      3 => DynamicImage::ImageRgba8(imageops::rotate180(&img)),
+      4 => DynamicImage::ImageRgba8(imageops::flip_vertical(&img)),
+      5 => DynamicImage::ImageRgba8(imageops::flip_horizontal(&imageops::rotate90(&img))),
+      6 => DynamicImage::ImageRgba8(imageops::rotate90(&img)),
+      7 => DynamicImage::ImageRgba8(imageops::flip_horizontal(&imageops::rotate270(&img))),
+      8 => DynamicImage::ImageRgba8(imageops::rotate270(&img)),
+      _ => img,
+    };
+    if !rgba {
+      img = DynamicImage::ImageRgb8(img.into_rgb8());
+    }
+    img
+  }
 
 fn most_common_value(values: impl Iterator<Item = u32>) -> u32 {
     let most_common = values

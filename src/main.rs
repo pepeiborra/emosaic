@@ -3,6 +3,7 @@
 #![feature(type_changing_struct_update)]
 mod mosaic;
 
+use image::imageops::FilterType;
 use derive_more::Display;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -162,7 +163,7 @@ fn main() {
             // Open the source image
             eprintln!("Opening source image: {}", img_path.display());
             let img = match image::open(img_path) {
-                Ok(img) => img.to_rgb(),
+                Ok(img) => img.to_rgb8(),
                 Err(e) => {
                     eprintln!("Failed to open source image: {}", e);
                     std::process::exit(1);
@@ -208,20 +209,21 @@ fn main() {
                     &overlay,
                     output.width(),
                     output.height(),
-                    image::FilterType::Nearest,
+                    FilterType::Nearest,
                 );
                 // Apply overlay
-                let mut output2 = DynamicImage::ImageRgb8(output).to_rgba();
+                let mut output2 = DynamicImage::ImageRgb8(output).to_rgba8();
                 imageops::overlay(&mut output2, &overlay, 0, 0);
+                let format = ImageFormat::Png;
                 output2
-                    .save_with_format(output_path, ImageFormat::PNG)
+                    .save_with_format(output_path, format)
                     .unwrap();
                 return;
             }
 
             eprintln!("Writing output file to {}", output_path.display());
             output
-                .save_with_format(output_path, ImageFormat::JPEG)
+                .save_with_format(output_path, ImageFormat::Png)
                 .unwrap();
         }
     }
@@ -272,7 +274,7 @@ where
         nheight
     );
 
-    let img = imageops::resize(original_img, nwidth, nheight, image::FilterType::Lanczos3);
+    let img = imageops::resize(original_img, nwidth, nheight, FilterType::Lanczos3);
 
     let analysis_cache_path = tiles_dir.join(format!(
         ".emosaic_{}to1{}",
