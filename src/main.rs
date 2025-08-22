@@ -1,8 +1,10 @@
 #![feature(iter_advance_by)]
+#![feature(entry_insert)]
 mod mosaic;
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::fs::create_dir_all;
 use std::{fs, io};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
@@ -11,7 +13,7 @@ use derive_more::Display;
 use clap::{self, Parser, ValueEnum};
 use image::{imageops, DynamicImage, ImageFormat, RgbImage, Rgba, RgbaImage};
 
-use indicatif::ProgressBar;
+use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::{find_images, read_image};
 use mosaic::{
     analysis::{_1to1, _4to1},
@@ -40,7 +42,8 @@ fn generate_tile_set<T: Serialize>(
 ) -> io::Result<TileSet<T>> {
     let extensions: HashSet<&OsStr> = extensions.into_iter().map(|s| OsStr::new(s)).collect();
     let images_paths = find_images(tiles_path, |path: &OsStr| extensions.contains(path))?;
-    let pb = ProgressBar::new(images_paths.len() as u64);
+    let pb = ProgressBar::new(images_paths.len() as u64).with_message("Analysing tiles")
+    .with_style(ProgressStyle::default_bar().template("{msg} {wide_bar} {pos}/{len} ({per_sec})").unwrap());
 
     let errors: RwLock<Vec<ImageError>> = RwLock::new(vec![]);
     let images = images_paths.into_par_iter().map(|path| {
@@ -120,6 +123,7 @@ fn is_between_zero_and_one(s: &str) -> Result<f64, String> {
     Err(String::from("Value must be between 0 and 1"))
 }
 
+
 fn main() {
     let cli = Cli::parse();
 
@@ -132,6 +136,9 @@ fn main() {
         tile_size,
         tint_opacity,
     } = cli;
+
+    let cache_path : PathBuf = dirs::cache_dir().unwrap().join("mosaic");
+    create_dir_all(cache_path).unwrap();
 
     // Open the source image
     let img_path = Path::new(&img);
