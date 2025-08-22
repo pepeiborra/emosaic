@@ -1,16 +1,18 @@
 pub mod color;
 pub mod image;
-pub mod tiles;
 pub mod stats;
+pub mod tiles;
 
 use std::path::PathBuf;
-use std::sync::{Mutex, RwLock};
+use std::sync::Mutex;
 
-use color::average_color;
-use ::image::{imageops, Rgb};
 use ::image::RgbImage;
+use ::image::{imageops, Rgb};
+use color::average_color;
 use indicatif::{ProgressBar, ProgressStyle};
 use kiddo::fixed::distance::Manhattan;
+use kiddo::NearestNeighbour;
+use rand::prelude::IteratorRandom;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use stats::Stats;
 use tiles::{Tile, TileSet};
@@ -20,9 +22,17 @@ pub fn render<'a>(
     tile_size: u32,
     step: usize,
     get_tile: impl Fn(u32, u32) -> ::image::ImageBuffer<Rgb<u8>, Vec<u8>> + Sync,
-) -> RgbImage
-{
+) -> RgbImage {
     let tile_size_stepped = tile_size / step as u32;
+
+    eprintln!(
+        "Doing {}x{} tiles resulting in a {}x{} image (step: {step})",
+        source_img.width() / step as u32,
+        source_img.height() / step as u32,
+        source_img.width() * tile_size_stepped,
+        source_img.height() * tile_size_stepped,
+    );
+
     let pb = ProgressBar::new(
         (source_img.height() * source_img.width() / (step as u32) / (step as u32)) as u64,
     )
@@ -70,7 +80,10 @@ pub fn render_nto1<const N: usize>(
     tile_set: TileSet<[Rgb<u8>; N]>,
     tile_size: u32,
     no_repeat: bool,
-) -> RgbImage where [(); N*3]:
+    randomize: bool,
+) -> RgbImage
+where
+    [(); N * 3]:,
 {
     let stats = Mutex::new(Stats::new());
 
@@ -84,13 +97,34 @@ pub fn render_nto1<const N: usize>(
             colors[i] = *source_img.get_pixel(x + (i / step) as u32, y + (i % step) as u32)
         }
         let mut tile = Tile::from_colors(colors);
+        let closest: NearestNeighbour<_, _>;
         {
             let mut kdtree = kdtree.lock().unwrap();
-            let closest = kdtree.nearest_one::<Manhattan>(&tile.coords());
-            assert!(closest.item !=0, "tile: {:?}, closest: {:?}", colors, closest);
-            tile = tile_set.get_tile(closest.item).expect(format!("Tile not found: {:?}", closest.item).as_str());
-        if no_repeat
-            { kdtree.remove(&tile.coords(), closest.item); }
+            if randomize {
+                let mut closest_ones = kdtree.nearest_n::<Manhattan>(&tile.coords(), 20);
+                closest_ones.sort_by_key(|x| x.distance);
+                let min_distance = closest_ones[0].distance;
+                closest = closest_ones
+                    .into_iter()
+                    .take_while(|x| x.distance - min_distance < min_distance / 100)
+                    .choose(&mut rand::thread_rng())
+                    .unwrap();
+                tile = tile_set
+                    .get_tile(closest.item)
+                    .expect(format!("Tile not found: {:?}", closest.item).as_str());
+            } else {
+                closest = kdtree.nearest_one::<Manhattan>(&tile.coords());
+            }
+
+            assert!(
+                closest.item != 0,
+                "tile: {:?}, closest: {:?}",
+                colors,
+                closest
+            );
+            if no_repeat {
+                kdtree.remove(&tile.coords(), closest.item);
+            }
         }
         stats.lock().unwrap().push_tile(&tile);
         tile_set.get_image(&tile, tile_size)
@@ -114,7 +148,7 @@ pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u3
             pb.inc(1);
             imageops::overlay(
                 &mut output,
-                &tile_set.get_image(&tile_set.random_tile(),tile_size),
+                &tile_set.get_image(&tile_set.random_tile(), tile_size),
                 tile_x * tile_size,
                 tile_y * tile_size,
             );
@@ -135,7 +169,7 @@ impl<const N: usize> AnalyseTiles<[Rgb<u8>; N]> for _Nto1<N> {
         images: impl ParallelIterator<Item = (PathBuf, RgbImage)>,
     ) -> TileSet<[Rgb<u8>; N]> {
         let dim = (N as f64).sqrt();
-        let tiles : Vec<_> = images
+        let tiles: Vec<_> = images
             .map(|(path_buf, img)| {
                 let dim_width = (f64::from(img.width()) / dim).floor() as u32;
                 let dim_height = (f64::from(img.height()) / dim).floor() as u32;
@@ -188,7 +222,7 @@ mod tests {
         let source_img = RgbImage::new(10, 10);
         let mut tile_set: TileSet<()> = TileSet::new();
         let tile_size = 32;
-        tile_set.push_tile_with_image( PathBuf::new(), (), RgbImage::new(tile_size, tile_size));
+        tile_set.push_tile_with_image(PathBuf::new(), (), RgbImage::new(tile_size, tile_size));
         let output = render_random(&source_img, tile_set, tile_size);
         assert_eq!(output.width(), source_img.width() * tile_size);
         assert_eq!(output.height(), source_img.height() * tile_size);
@@ -198,9 +232,9 @@ mod tests {
     fn test_render_nto1() {
         let source_img = RgbImage::new(5, 2);
         let mut tile_set: TileSet<[Rgb<u8>; 1]> = TileSet::new();
-        tile_set.push_tile_with_image(PathBuf::new(), [Rgb([0, 0, 0]); 1],RgbImage::new(8, 8));
+        tile_set.push_tile_with_image(PathBuf::new(), [Rgb([0, 0, 0]); 1], RgbImage::new(8, 8));
         let tile_size = 8;
-        let output = render_nto1(&source_img, tile_set, tile_size, false);
+        let output = render_nto1(&source_img, tile_set, tile_size, false, false);
         assert_eq!(output.width(), source_img.width() * tile_size);
         assert_eq!(output.height(), source_img.height() * tile_size);
     }
@@ -216,24 +250,38 @@ mod tests {
         assert_eq!(tile_set.len(), 2);
     }
 
-    fn gen_test_analyse_tiles_consistency<const N: usize>(tile_size: u32, no_repeat: bool) where [(); N*3]:
+    fn gen_test_analyse_tiles_consistency<const N: usize>(tile_size: u32, no_repeat: bool)
+    where
+        [(); N * 3]:,
     {
         let images: Vec<(PathBuf, RgbImage)> = vec![
-            (PathBuf::new(), RgbImage::from_pixel(tile_size, tile_size, Rgb([255, 0, 0]))),
-            (PathBuf::new(), RgbImage::from_pixel(tile_size, tile_size, Rgb([0, 255, 0]))),
-            (PathBuf::new(), RgbImage::from_pixel(tile_size, tile_size, Rgb([0, 0, 255]))),
+            (
+                PathBuf::new(),
+                RgbImage::from_pixel(tile_size, tile_size, Rgb([255, 0, 0])),
+            ),
+            (
+                PathBuf::new(),
+                RgbImage::from_pixel(tile_size, tile_size, Rgb([0, 255, 0])),
+            ),
+            (
+                PathBuf::new(),
+                RgbImage::from_pixel(tile_size, tile_size, Rgb([0, 0, 255])),
+            ),
         ];
 
         let analyser = _Nto1::<N>();
         let mut tile_set = analyser.analyse(images.into_par_iter());
 
         // initialize the tile images reusing the colors to avoid hitting the file system
-        for tile in tile_set.tiles.clone().iter(){
-            tile_set.set_image(tile, RgbImage::from_pixel(tile_size, tile_size, tile.colors[0]));
-            }
+        for tile in tile_set.tiles.clone().iter() {
+            tile_set.set_image(
+                tile,
+                RgbImage::from_pixel(tile_size, tile_size, tile.colors[0]),
+            );
+        }
 
         let source_img = RgbImage::from_pixel(N as u32, N as u32, Rgb([255, 0, 0]));
-        let rendered_img = render_nto1(&source_img, tile_set, tile_size, no_repeat);
+        let rendered_img = render_nto1(&source_img, tile_set, tile_size, no_repeat, false);
 
         // Check if the rendered image is consistent with the tiles
         for y in 0..rendered_img.height() {
