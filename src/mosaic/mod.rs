@@ -138,7 +138,7 @@ where
             }
         }
         stats.lock().unwrap().push_tile(&tile);
-        tile_set.get_image(&tile, tile_size)
+        tile_set.get_image(&tile, tile_size).expect("Image not found")
     });
 
     stats.into_inner().unwrap().summarise(&tile_set);
@@ -159,7 +159,7 @@ pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u3
             pb.inc(1);
             imageops::overlay(
                 &mut output,
-                &tile_set.get_image(&tile_set.random_tile(), tile_size),
+                &tile_set.get_image(&tile_set.random_tile(), tile_size).expect("Image not found"),
                 tile_x * tile_size,
                 tile_y * tile_size,
             );

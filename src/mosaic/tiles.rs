@@ -221,17 +221,17 @@ impl<T> TileSet<T> {
         &self,
         tile: &Tile<T>,
         tile_size: u32,
-    ) -> image::ImageBuffer<Rgb<u8>, Vec<u8>> {
+    ) -> ImageResult<image::ImageBuffer<Rgb<u8>, Vec<u8>>> {
         let path = self.get_path(tile);
         let image = self.images.get(&tile.idx).map_or_else(
-            || prepare_tile(path, tile_size).expect(path.to_str().unwrap()),
-            |x| x.clone(),
-        );
-        if tile.flipped {
+            || prepare_tile(path, tile_size),
+            |x| Ok(x.clone()),
+        )?;
+        Ok(if tile.flipped {
             image::imageops::flip_horizontal(&image)
         } else {
             image
-        }
+        })
     }
 
     pub fn get_path<A>(&self, tile: &Tile<A>) -> &Path {
@@ -308,7 +308,7 @@ pub fn prepare_tile(
     tile_size: u32,
 ) -> ImageResult<::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>> {
     // We cache resized images in the home cache path using their content hash
-    let content_hash = md5::compute(std::fs::read(path).expect(path.to_str().unwrap()));
+    let content_hash = md5::compute(std::fs::read(path)?);
     let cache_path = dirs::cache_dir()
         .unwrap()
         .join("mosaic")

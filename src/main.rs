@@ -19,7 +19,7 @@ use mosaic::image::find_images;
 use mosaic::tiles::{prepare_tile, TileSet};
 use mosaic::{render_nto1, render_random};
 use mosaic::{AnalyseTiles, _Nto1};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use serde::Serialize;
 
 #[derive(Parser)]
@@ -282,20 +282,29 @@ where
     if force {
         fs::remove_file(&analysis_cache_path).ok();
     }
-    let tile_set: TileSet<[Rgb<u8>; N]> = match fs::read(&analysis_cache_path) {
-        Ok(bytes) => {
-            eprintln!("Reusing analysis cache");
-            bincode::deserialize(&bytes).unwrap()
-        }
-        _ => {
+    let tile_set: TileSet<[Rgb<u8>; N]> = fs::read(&analysis_cache_path).ok().and_then(
+        |bytes| {
+            let analysis: TileSet<[Rgb<u8>; N]> = bincode::deserialize(&bytes).unwrap();
+            // validate the analysis: check that all the paths exist
+            let is_valid = analysis
+                .tiles
+                .par_iter()
+                .all(|tile| analysis.get_path(tile).exists());
+            if is_valid {
+                eprintln!("Reusing analysis cache");
+                Some(analysis)
+            } else {
+                eprintln!("Found missing files, regenerating analysis cache");
+                None
+            }
+        }).unwrap_or_else(|| {
             let extensions = extensions.into_iter().map(OsString::from).collect();
             let tile_set =
                 generate_tile_set(&tiles_dir, tile_size, _Nto1::<N>(), extensions).unwrap();
             let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
             fs::write(analysis_cache_path, encoded_tile_set).unwrap();
             tile_set
-        }
-    };
+        });
     eprintln!("Tile set with {} tiles", tile_set.len());
     render_nto1(&img, tile_set, tile_size, no_repeat, randomize)
 }
