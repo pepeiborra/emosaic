@@ -25,14 +25,6 @@ pub fn render<'a>(
 ) -> RgbImage {
     let tile_size_stepped = tile_size / step as u32;
 
-    eprintln!(
-        "Doing {}x{} tiles resulting in a {}x{} image (step: {step})",
-        source_img.width() / step as u32,
-        source_img.height() / step as u32,
-        source_img.width() * tile_size_stepped,
-        source_img.height() * tile_size_stepped,
-    );
-
     let pb = ProgressBar::new(
         (source_img.height() * source_img.width() / (step as u32) / (step as u32)) as u64,
     )
@@ -91,6 +83,22 @@ where
 
     let step = (N as f64).sqrt() as usize;
 
+    let htiles = source_img.width() / step as u32;
+    let vtiles = source_img.height() / step as u32;
+    eprintln!(
+        "Doing {}x{} tiles resulting in a {}x{} image (step: {step})",
+        htiles,
+        vtiles,
+        htiles * tile_size,
+        vtiles * tile_size,
+    );
+
+    if no_repeat && (htiles*vtiles) as usize > tile_set.len()*2 {
+        panic!(
+            "Error: not enough tiles to fill the image without repeating"
+        );
+    }
+
     let res = render(source_img, tile_size, step, |x, y| {
         let mut colors = [Rgb([0, 0, 0]); N];
         for i in 0..N {
@@ -109,19 +117,18 @@ where
                     .take_while(|x| x.distance - min_distance < min_distance / 100)
                     .choose(&mut rand::thread_rng())
                     .unwrap();
-                tile = tile_set
-                    .get_tile(closest.item)
-                    .expect(format!("Tile not found: {:?}", closest.item).as_str());
             } else {
                 closest = kdtree.nearest_one::<Manhattan>(&tile.coords());
             }
-
             assert!(
                 closest.item != 0,
                 "tile: {:?}, closest: {:?}",
                 colors,
                 closest
             );
+            tile = tile_set
+                .get_tile(closest.item)
+                .expect(format!("Tile not found: {:?}", closest.item).as_str());
             if no_repeat {
                 kdtree.remove(&tile.coords(), closest.item);
             }
