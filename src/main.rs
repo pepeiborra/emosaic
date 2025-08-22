@@ -165,7 +165,6 @@ fn main() {
             },
         )) => {
             let img_path = img;
-            let output_path = output_path;
             // Open the source image
             eprintln!("Opening source image: {}", img_path.display());
             let img = match image::open(img_path) {
@@ -176,7 +175,7 @@ fn main() {
                 }
             };
 
-            let output = match mode {
+            let img_and_stats = match mode {
                 Mode::_1 => n_to_1::<1>(args, &img, tile_size, crop),
                 Mode::_2 => n_to_1::<4>(args, &img, tile_size, crop),
                 Mode::_3 => n_to_1::<9>(args, &img, tile_size, crop),
@@ -203,11 +202,15 @@ fn main() {
                         }
                     }
                     eprintln!("Tile set with {} tiles", tile_set.len());
-                    Ok(render_random(&img, tile_set, tile_size))
+                    Ok(ImgAndStats {
+                        img: render_random(&img, tile_set, tile_size),
+                        stats_img: None,
+                    })
                 }
             }
             .unwrap();
 
+            let output = img_and_stats.img;
             if tint_opacity > 0.0 {
                 let mut overlay = RgbaImage::new(img.width(), img.height());
                 for x in 0..img.width() {
@@ -234,10 +237,22 @@ fn main() {
 
             eprintln!("Writing output file to {}", output_path.display());
             output
-                .save_with_format(output_path, ImageFormat::Png)
+                .save_with_format(output_path.clone(), ImageFormat::Png)
                 .unwrap();
+            if let Some(stats_img) = img_and_stats.stats_img {
+                let stats_path = output_path.with_extension("stats.png");
+                eprintln!("Writing stats file to {}", stats_path.display());
+                stats_img
+                    .save_with_format(stats_path, ImageFormat::Png)
+                    .unwrap();
+            }
         }
     }
+}
+
+struct ImgAndStats {
+    img: image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
+    stats_img: Option<image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>,
 }
 
 fn n_to_1<const N: usize>(
@@ -254,7 +269,7 @@ fn n_to_1<const N: usize>(
     original_img: &image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
     tile_size: u32,
     crop: bool,
-) -> Result<image::ImageBuffer<image::Rgb<u8>, Vec<u8>>, ImageError>
+) -> Result<ImgAndStats, ImageError>
 where
     [(); N * 3]:,
 {
@@ -347,7 +362,10 @@ where
     }?;
 
     result.stats.summarise(&result.tile_set);
-    Ok(result.image)
+    Ok(ImgAndStats {
+        img: result.image,
+        stats_img: Some(result.stats.render(tile_size)),
+    })
 }
 
 fn generate_tile_set<const N: usize>(

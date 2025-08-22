@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use image::{ImageBuffer, Rgb, RgbImage};
 use itertools::Itertools;
 
 use super::tiles::{Tile, TileSet};
@@ -69,5 +70,24 @@ where
                 tile.colors
             );
         }
+    }
+    pub fn render(self, tile_size: u32) -> ImageBuffer<Rgb<u8>, Vec<u8>> {
+        let dim_x = self.tiles.keys().map(|(x, _)| x).max().unwrap();
+        let dim_y = self.tiles.keys().map(|(_, y)| y).max().unwrap();
+        let max_dist = self
+            .tiles
+            .values()
+            .map(|t| t.colors.into())
+            .max_by(|a: &f64, b| a.partial_cmp(b).unwrap())
+            .unwrap_or_else(|| 0.0);
+        let mut image = RgbImage::new(dim_x / tile_size + 1, dim_y / tile_size + 1);
+        for ((x, y), tile) in &self.tiles {
+            let dist: f64 = tile.colors.into();
+            let dist = dist / max_dist;
+            let dist = (dist * 255.0) as u8;
+            let color = image::Rgb([dist, dist, dist]);
+            image.put_pixel(*x / tile_size, *y / tile_size, color);
+        }
+        image
     }
 }
