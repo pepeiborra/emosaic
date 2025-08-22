@@ -145,8 +145,9 @@ where
             }
             assert!(
                 closest.item != 0,
-                "Closest item should not be zero. Did you use FixedU8? closest: {:?}",
-                closest
+                "Closest item should not be zero. Did you use FixedU8? closest: {:?}, len(kdtree): {}",
+                closest,
+                kdtree.read().unwrap().size()
             );
             tile = tile_set
                 .get_tile(closest.item)
