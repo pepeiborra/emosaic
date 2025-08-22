@@ -17,10 +17,8 @@ use image::{imageops, DynamicImage, ImageFormat, Rgb, Rgba, RgbaImage};
 use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
 use mosaic::tiles::{prepare_tile, TileSet};
-use mosaic::{render_nto1, render_random};
-use mosaic::{AnalyseTiles, _Nto1};
+use mosaic::{analyse, render_nto1, render_random};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use serde::Serialize;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -318,7 +316,7 @@ where
         .unwrap_or_else(|| {
             let extensions = extensions.into_iter().map(OsString::from).collect();
             let tile_set =
-                generate_tile_set(&tiles_dir, tile_size, _Nto1::<N>(), extensions, crop).unwrap();
+                generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop).unwrap();
             let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
             fs::write(analysis_cache_path, encoded_tile_set).unwrap();
             tile_set
@@ -334,16 +332,15 @@ struct ImageError {
     error: image::ImageError,
 }
 
-fn generate_tile_set<T>(
+fn generate_tile_set<const N: usize>(
     tiles_path: &Path,
     tile_size: u32,
-    analysis: impl AnalyseTiles<T>,
     extensions: HashSet<OsString>,
     crop: bool,
-) -> io::Result<TileSet<T>>
+) -> io::Result<TileSet<[Rgb<u8>;N]>>
 where
-    TileSet<T>: Serialize,
-    T: std::hash::Hash + Eq + Copy,
+    // TileSet<T>: Serialize,
+    // T: std::hash::Hash + Eq + Copy,
 {
     let images_paths = find_images(tiles_path, |path: &OsStr| extensions.contains(path))?;
     let pb = ProgressBar::new(images_paths.len() as u64)
@@ -355,7 +352,7 @@ where
         );
 
     let errors: RwLock<Vec<ImageError>> = RwLock::new(vec![]);
-    let images = images_paths
+    let tile_set : TileSet<_> = images_paths
         .into_par_iter()
         .map(|path| {
             let img = prepare_tile(&path, tile_size, crop);
@@ -363,7 +360,7 @@ where
         })
         .inspect(move |_| pb.inc(1))
         .filter_map(|x| match x {
-            (path, Ok(x)) => Some((path, x)),
+            (path, Ok(x)) => Some((path, analyse::<N>(x))),
             (path, Err(error)) => {
                 let path = path.strip_prefix(tiles_path).unwrap();
                 errors.write().unwrap().push(ImageError {
@@ -372,8 +369,7 @@ where
                 });
                 None
             }
-        });
-    let tile_set = analysis.analyse(images);
+        }).collect();
     let all_errors = errors.into_inner().unwrap();
     if !all_errors.is_empty() {
         eprintln!("Failed to read the following images({}):", all_errors.len());

@@ -11,8 +11,12 @@ use ::image::FilterType;
 use ::image::ImageResult;
 use ::image::Rgb;
 use fixed::FixedU32;
+use itertools::MultiUnzip;
 use num_integer::Roots;
 use rand::prelude::*;
+use rayon::iter::FromParallelIterator;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
 use serde::ser::SerializeTuple;
 use serde::{Deserialize, Serialize};
 use typenum::U0;
@@ -302,6 +306,32 @@ impl<T> FromIterator<(PathBuf, T)> for TileSet<T> {
             })
             .unzip();
         TileSet::from_tiles(tiles, paths)
+    }
+}
+
+impl<T> FromIterator<(PathBuf, ::image::ImageBuffer<Rgb<u8>, Vec<u8>>, T)> for TileSet<T> {
+    fn from_iter<I: IntoIterator<Item = (PathBuf, ::image::ImageBuffer<Rgb<u8>, Vec<u8>>, T)>>(iter: I) -> Self {
+        let (paths, tiles, images) = iter
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (path, img, color))| {
+                (path, Tile::new((idx + 1).try_into().unwrap(), color), ((idx+1) as u16, img))
+            })
+            .multiunzip();
+        TileSet{tiles, images, paths}
+    }
+}
+
+impl<A: Send, T> FromParallelIterator<A> for TileSet<T> where TileSet<T>: FromIterator<A> {
+    fn from_par_iter<I>(par_iter: I) -> Self
+    where
+        I: IntoParallelIterator<Item = A>,
+        A: Send,
+    {
+        let items: Vec<_> = par_iter
+            .into_par_iter()
+            .collect();
+        items.into_iter().collect()
     }
 }
 

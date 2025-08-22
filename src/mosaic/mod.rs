@@ -105,7 +105,9 @@ where
     let res = render(source_img, tile_size, step, |x, y| {
         let mut colors = [Rgb([0, 0, 0]); N];
         for i in 0..N {
-            colors[i] = *source_img.get_pixel(x + (i / step) as u32, y + (i % step) as u32)
+            let x = x + (i % step) as u32;
+            let y = y + (i / step) as u32;
+            colors[i] = *source_img.get_pixel(x, y)
         }
         let mut tile = Tile::from_colors(colors);
         let closest: NearestNeighbour<_, _>;
@@ -193,41 +195,28 @@ pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u3
     output
 }
 
-pub(crate) trait AnalyseTiles<T> {
-    fn analyse(self: Self, images: impl ParallelIterator<Item = (PathBuf, RgbImage)>)
-        -> TileSet<T>;
-}
+pub(crate) fn analyse<const N: usize>(img: RgbImage) -> [Rgb<u8>; N] {
+    let dim = (N as f64).sqrt();
+    let dim_width = (f64::from(img.width()) / dim).floor() as u32;
+    let dim_height = (f64::from(img.height()) / dim).floor() as u32;
 
-pub(crate) struct _Nto1<const N: usize>();
-impl<const N: usize> AnalyseTiles<[Rgb<u8>; N]> for _Nto1<N> {
-    fn analyse(
-        self,
-        images: impl ParallelIterator<Item = (PathBuf, RgbImage)>,
-    ) -> TileSet<[Rgb<u8>; N]> {
-        let dim = (N as f64).sqrt();
-        let tiles: Vec<_> = images
-            .map(|(path_buf, img)| {
-                let dim_width = (f64::from(img.width()) / dim).floor() as u32;
-                let dim_height = (f64::from(img.height()) / dim).floor() as u32;
-
-                let mut colors = [Rgb([0u8, 0, 0]); N];
-                for i in 0..N {
-                    let top = (i / dim as usize) as u32;
-                    let left = (i % dim as usize) as u32;
-                    let rect = (left * dim_width, top * dim_height, dim_width, dim_height);
-                    let color = average_color(&img, rect);
-                    colors[top as usize * dim as usize + left as usize] = color;
-                }
-
-                (path_buf, colors)
-            })
-            .collect();
-        tiles.into_iter().collect()
+    let mut colors = [Rgb([0u8, 0, 0]); N];
+    for i in 0..N {
+        let top = (i / dim as usize) as u32;
+        let left = (i % dim as usize) as u32;
+        let rect = (left * dim_width, top * dim_height, dim_width, dim_height);
+        let color = average_color(&img, rect);
+        colors[i] = color;
     }
+
+    colors
 }
 
 #[cfg(test)]
 mod tests {
+    use num_integer::Roots;
+    use rayon::iter::IntoParallelRefIterator;
+
     use super::*;
     use std::path::PathBuf;
 
@@ -281,112 +270,106 @@ mod tests {
             (PathBuf::from("image1.jpg"), RgbImage::new(10, 10)),
             (PathBuf::from("image2.jpg"), RgbImage::new(10, 10)),
         ];
-        let analyser = _Nto1::<9>();
-        let tile_set = analyser.analyse(images.into_par_iter());
+        let tile_set = images
+            .into_par_iter()
+            .map(|(path, img)| (path, analyse::<9>(img)))
+            .collect::<Vec<_>>();
         assert_eq!(tile_set.len(), 2);
     }
 
-    fn gen_test_analyse_tiles_consistency<const N: usize>(tile_size: u32, no_repeat: bool)
-    where
-        [(); N * 3]:,
-    {
-        let images: Vec<(PathBuf, RgbImage)> = vec![
-            (
-                PathBuf::new(),
-                RgbImage::from_pixel(tile_size, tile_size, Rgb([255, 0, 0])),
-            ),
-            (
-                PathBuf::new(),
-                RgbImage::from_pixel(tile_size, tile_size, Rgb([0, 255, 0])),
-            ),
-            (
-                PathBuf::new(),
-                RgbImage::from_pixel(tile_size, tile_size, Rgb([0, 0, 255])),
-            ),
-        ];
+    fn gen_test_analyse_tiles_consistency<const N: usize>() where [(); N * 3]: {
+        let black = Rgb([0, 0, 0]);
+        let white = Rgb([255, 255, 255]);
+        let dim = N.sqrt() as u32;
+        // generate all the possible black&white tiles of dim*dim size
+        let pow = 2u32.pow(N as u32);
+        let universe: Vec<_> = (0 .. pow)
+            .map(|index| {
+                // translate the index to binary (base 2)
+                let bits: Vec<bool> = (0..N).map(|i| (index & (1 << i)) != 0).collect();
+                RgbImage::from_fn(dim, dim, |x, y| {
+                    if bits[(x * dim + y) as usize] {
+                        black
+                    } else {
+                        white
+                    }
+                })
+            })
+            .collect();
 
-        let analyser = _Nto1::<N>();
-        let mut tile_set = analyser.analyse(images.into_par_iter());
+        // for any image from this universe, the tile set should contain only one tile and the image should be the same
+        let tile_set : TileSet<[Rgb<u8>;N]> =
+            universe.par_iter().map(|img| {
+                (PathBuf::new(), img.clone(), analyse::<N>(img.clone()))
+            }).collect();
 
-        // initialize the tile images reusing the colors to avoid hitting the file system
-        for tile in tile_set.tiles.clone().iter() {
-            tile_set.set_image(
-                tile,
-                RgbImage::from_pixel(tile_size, tile_size, tile.colors[0]),
-            );
-        }
-
-        let source_img = RgbImage::from_pixel(N as u32, N as u32, Rgb([255, 0, 0]));
-        let rendered_img = render_nto1(&source_img, tile_set, tile_size, no_repeat, None);
-
-        // Check if the rendered image is consistent with the tiles
-        for y in 0..rendered_img.height() {
-            for x in 0..rendered_img.width() {
-                let pixel = rendered_img.get_pixel(x, y);
-                assert_eq!(pixel, &Rgb([255, 0, 0]));
+        for img in universe {
+            let rendered_img = render_nto1(&img, tile_set.clone(), dim, false, None);
+            assert_eq!(rendered_img.into_iter().collect::<Vec<_>>(), img.into_iter().collect::<Vec<_>>());
             }
+
         }
-    }
 
-    // #[test]
-    // fn test_analyse_tiles_consistency_1_no_repeat() {
-    //     gen_test_analyse_tiles_consistency::<1>(1, true);
-    //     ()
+    // fn gen_test_analyse_tiles_consistency<const N: usize>(tile_size: u32, no_repeat: bool)
+    // where
+    //     [(); N * 3]:,
+    // {
+    //     let images: Vec<(PathBuf, RgbImage)> = vec![
+    //         (
+    //             PathBuf::new(),
+    //             RgbImage::from_pixel(tile_size, tile_size, Rgb([255, 0, 0])),
+    //         ),
+    //         (
+    //             PathBuf::new(),
+    //             RgbImage::from_pixel(tile_size, tile_size, Rgb([0, 255, 0])),
+    //         ),
+    //         (
+    //             PathBuf::new(),
+    //             RgbImage::from_pixel(tile_size, tile_size, Rgb([0, 0, 255])),
+    //         ),
+    //     ];
+
+    //     let analyser = _Nto1::<N>();
+    //     let mut tile_set = analyser.analyse(images.into_par_iter());
+
+    //     // initialize the tile images reusing the colors to avoid hitting the file system
+    //     for tile in tile_set.tiles.clone().iter() {
+    //         tile_set.set_image(
+    //             tile,
+    //             RgbImage::from_pixel(tile_size, tile_size, tile.colors[0]),
+    //         );
+    //     }
+
+    //     let source_img = RgbImage::from_pixel(N as u32, N as u32, Rgb([255, 0, 0]));
+    //     let rendered_img = render_nto1(&source_img, tile_set, tile_size, no_repeat, None);
+
+    //     // Check if the rendered image is consistent with the tiles
+    //     for y in 0..rendered_img.height() {
+    //         for x in 0..rendered_img.width() {
+    //             let pixel = rendered_img.get_pixel(x, y);
+    //             assert_eq!(pixel, &Rgb([255, 0, 0]));
+    //         }
+    //     }
     // }
 
-    // #[test]
-    // fn test_analyse_tiles_consistency_1_4_no_repeat() {
-    //     gen_test_analyse_tiles_consistency::<1>(4, true);
-    //     ()
-    // }
-    // #[test]
-    // fn test_analyse_tiles_consistency_4_no_repeat() {
-    //     gen_test_analyse_tiles_consistency::<4>(4, true);
-    //     ()
-    // }
-    // #[test]
-    // fn test_analyse_tiles_consistency_4_8_no_repeat() {
-    //     gen_test_analyse_tiles_consistency::<4>(8, true);
-    //     ()
-    // }
-    // #[test]
-    // fn test_analyse_tiles_consistency_9_no_repeat() {
-    //     gen_test_analyse_tiles_consistency::<9>(9, true);
-    //     ()
-    // }
-    // #[test]
-    // fn test_analyse_tiles_consistency_16_no_repeat() {
-    //     gen_test_analyse_tiles_consistency::<16>(16, true);
-    //     ()
-    // }
     #[test]
     fn test_analyse_tiles_consistency_1() {
-        gen_test_analyse_tiles_consistency::<1>(1, false);
-        ()
-    }
-    #[test]
-    fn test_analyse_tiles_consistency_1_4() {
-        gen_test_analyse_tiles_consistency::<1>(4, false);
+        gen_test_analyse_tiles_consistency::<1>();
         ()
     }
     #[test]
     fn test_analyse_tiles_consistency_4() {
-        gen_test_analyse_tiles_consistency::<4>(4, false);
-        ()
-    }
-    #[test]
-    fn test_analyse_tiles_consistency_4_8() {
-        gen_test_analyse_tiles_consistency::<4>(8, false);
+        gen_test_analyse_tiles_consistency::<4>();
         ()
     }
     #[test]
     fn test_analyse_tiles_consistency_9() {
-        gen_test_analyse_tiles_consistency::<9>(9, false);
+        gen_test_analyse_tiles_consistency::<9>();
         ()
     }
     #[test]
     fn test_analyse_tiles_consistency_16() {
-        gen_test_analyse_tiles_consistency::<16>(16, false);
+        gen_test_analyse_tiles_consistency::<16>();
         ()
     }
 }
