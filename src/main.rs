@@ -4,7 +4,7 @@
 mod mosaic;
 
 use derive_more::Display;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::create_dir_all;
 use std::path::{Path, PathBuf};
@@ -303,7 +303,7 @@ fn generate_tile_set<T>(
     extensions: HashSet<&OsStr>,
 ) -> io::Result<TileSet<T>>
 where
-    TileSet<T>: Serialize,
+    TileSet<T>: Serialize, T: std::hash::Hash + Eq + Copy
 {
     let images_paths = find_images(tiles_path, |path: &OsStr| extensions.contains(path))?;
     let pb = ProgressBar::new(images_paths.len() as u64)
@@ -342,5 +342,16 @@ where
         }
     }
 
+    summarise_tileset(&tile_set);
+
     Ok(tile_set)
+}
+
+fn summarise_tileset<T>(tile_set: &TileSet<T>) where T: std::hash::Hash + Eq + Copy {
+    let mut tiles_by_color : HashMap<T,  u16> = HashMap::new();
+    for tile in tile_set.tiles.iter() {
+        *tiles_by_color.entry(tile.colors).or_default() += 1;
+    }
+
+    eprintln!("The analysis produced {} unique tiles", tiles_by_color.len());
 }
