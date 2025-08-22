@@ -446,7 +446,7 @@ mod tests {
         let white = Rgb([255, 255, 255]);
         let dim = N.sqrt() as u32;
         // generate all the possible black&white tiles of dim*dim size
-        let pow = 2u32.pow(N as u32);
+        let pow = 2u32.pow(N as u32) - 1;
         let universe: Vec<_> = (0..pow)
             .map(|index| {
                 // translate the index to binary (base 2)
