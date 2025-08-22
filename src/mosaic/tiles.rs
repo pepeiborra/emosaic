@@ -197,6 +197,7 @@ impl<T> TileSet<T> {
     pub fn len(&self) -> usize {
         self.tiles.len()
     }
+    #[allow(dead_code)]
     pub fn map<T1>(self, f: fn(T) -> T1) -> TileSet<T1> {
         let tiles = self.tiles.into_iter().map(|t| t.map(f)).collect();
         TileSet { tiles, ..self }
@@ -206,6 +207,7 @@ impl<T> TileSet<T> {
         self.tiles.push(Tile::new(idx, colors));
         self.paths.push(path);
     }
+    #[allow(dead_code)]
     pub fn push_tile_with_image(
         &mut self,
         path_buf: PathBuf,
@@ -248,6 +250,7 @@ impl<T> TileSet<T> {
     pub fn get_path<A>(&self, tile: &Tile<A>) -> &Path {
         self.paths[tile.idx as usize - 1].as_path()
     }
+    #[allow(dead_code)]
     pub fn set_image(&mut self, tile: &Tile<T>, image: ::image::ImageBuffer<Rgb<u8>, Vec<u8>>) {
         self.images.insert(tile.idx, image);
     }
