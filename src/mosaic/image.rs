@@ -1,6 +1,8 @@
+use std::ffi::OsStr;
 use std::fs::{read_dir, ReadDir};
+use std::io;
 use std::path::{Path, PathBuf};
-use image::{DynamicImage, RgbImage};
+use image::{DynamicImage, ImageResult, RgbImage};
 
 pub struct ImageIterator {
     stack: Vec<ReadDir>,
@@ -47,4 +49,35 @@ impl Iterator for ImageIterator {
 
 pub fn read_images_in_dir(path: &Path) -> ImageIterator {
     ImageIterator::new(path)
+}
+
+pub fn find_images(path: &Path, extension: impl Fn(&OsStr) -> bool) -> io::Result<Vec<PathBuf>> {
+    let mut stack : Vec<PathBuf> = vec![path.to_owned()];
+    let mut images_paths = vec![];
+    while let Some(p) = stack.pop() {
+        let entries = read_dir(p)?;
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().map_or(false, |ext| extension(ext)) {
+                images_paths.push(path);
+            }
+        }
+    }
+    Ok(images_paths)
+}
+
+pub fn read_image(path: &Path) -> ImageResult<RgbImage> {
+        let img = image::open(&path)?;
+        match img {
+            DynamicImage::ImageRgb8(im) =>
+                Ok(im),
+            _ =>
+                match img.as_rgb8() {
+                    Some(i) => Ok(i.to_owned()),
+                    None => Err(image::ImageError::UnsupportedError("rgb8".to_owned()))
+                }
+        }
 }

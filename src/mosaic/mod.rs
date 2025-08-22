@@ -83,6 +83,10 @@ impl<T> TileSet<T> {
         let i = rng.gen_range(0, self.tiles.len());
         &self.tiles[i]
     }
+
+    pub fn len(&self) -> usize {
+        self.tiles.len()
+    }
 }
 
 pub fn render_1to1(

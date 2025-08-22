@@ -1,35 +1,72 @@
-#![feature(iter_array_chunks)]
+#![feature(iter_advance_by)]
 mod mosaic;
 
-use std::fs;
+use std::collections::HashSet;
+use std::ffi::OsStr;
+use std::{fs, io};
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
+use derive_more::Display;
 
 use clap::{self, Parser, ValueEnum};
 use image::{imageops, DynamicImage, ImageFormat, RgbImage, Rgba, RgbaImage};
 
 use indicatif::ProgressBar;
+use mosaic::image::{find_images, read_image};
 use mosaic::{
     analysis::{_1to1, _4to1},
     image::read_images_in_dir,
     render_1to1, render_4to1, render_random, Tile, TileSet,
 };
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Serialize;
 
 trait AnalyseTiles<T> {
-    fn analyse(self:Self, images: impl Iterator<Item = (PathBuf, RgbImage)>) -> TileSet<T>;
+    fn analyse(self:Self, images: impl ParallelIterator<Item = (PathBuf, RgbImage)>) -> TileSet<T>;
+}
+
+#[derive(Debug, Display)]
+#[display(fmt = "{:?}: {}", path, error)]
+struct ImageError {
+    path: PathBuf,
+    error: image::ImageError,
 }
 
 fn generate_tile_set<T: Serialize>(
     tiles_path: &Path,
     cache_path: &Path,
     analysis: impl AnalyseTiles<T>,
-) -> TileSet<T> {
-    let pb = ProgressBar::new(1000);
-    let images = pb.wrap_iter(read_images_in_dir(tiles_path));
+    extensions: HashSet<&str>,
+) -> io::Result<TileSet<T>> {
+    let extensions: HashSet<&OsStr> = extensions.into_iter().map(|s| OsStr::new(s)).collect();
+    let images_paths = find_images(tiles_path, |path: &OsStr| extensions.contains(path))?;
+    let pb = ProgressBar::new(images_paths.len() as u64);
+
+    let errors: RwLock<Vec<ImageError>> = RwLock::new(vec![]);
+    let images = images_paths.into_par_iter().map(|path| {
+            let img = read_image(&path);
+            (path, img)
+        }).inspect(move |_| pb.inc(1))
+        .filter_map(|x| match x {
+            (path, Ok(x)) => Some((path,x)),
+            (path, Err(error)) => {
+                let path = path.strip_prefix(tiles_path).unwrap();
+                errors.write().unwrap().push(ImageError{path:path.to_owned(), error});
+                None
+            }
+        });
     let tile_set = analysis.analyse(images);
     let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
     fs::write(&cache_path, encoded_tile_set).unwrap();
-    tile_set
+    let all_errors = errors.into_inner().unwrap();
+    if !all_errors.is_empty() {
+        eprintln!("Failed to read the following images({}):", all_errors.len());
+        for error in all_errors {
+            eprintln!("- {}", error);
+        }
+    }
+
+    Ok(tile_set)
 }
 
 #[derive(Parser)]
@@ -44,7 +81,7 @@ struct Cli {
     tint_opacity: f64,
 
     /// Output image path
-    #[clap(default_value_t = String::from("./output.png"), short, long, value_parser)]
+    #[clap(default_value_t = String::from("./output.jpg"), short, long, value_parser)]
     output_path: String,
 
     /// Mosaic mode to use
@@ -114,6 +151,7 @@ fn main() {
 
     // Read all images in tiles directory
     let tiles_path = Path::new(&tiles_dir);
+    let extensions = ["jpg", "jpeg"].into();
 
     let output = match mode {
         Mode::OneToOne => {
@@ -126,8 +164,9 @@ fn main() {
                     eprintln!("Reusing analysis cache");
                     bincode::deserialize(&bytes).unwrap()
                 },
-                _ => generate_tile_set(tiles_path, &analysis_cache_path, _1to1()),
+                _ => generate_tile_set(tiles_path, &analysis_cache_path, _1to1(), extensions).unwrap(),
             };
+            eprintln!("Tile set with {} tiles", tile_set.len());
             render_1to1(&img, &tile_set, tile_size)
         }
         Mode::FourToOne => {
@@ -136,9 +175,13 @@ fn main() {
                 fs::remove_file(&analysis_cache_path).ok();
             }
             let tile_set = match fs::read(&analysis_cache_path) {
-                Ok(bytes) => bincode::deserialize(&bytes).unwrap(),
-                _ => generate_tile_set(tiles_path, &analysis_cache_path, _4to1()),
+                Ok(bytes) => {
+                    eprintln!("Reusing analysis cache");
+                    bincode::deserialize(&bytes).unwrap()
+                },
+                _ => generate_tile_set(tiles_path, &analysis_cache_path, _4to1(), extensions).unwrap(),
             };
+            eprintln!("Tile set with {} tiles", tile_set.len());
             render_4to1(&img, &tile_set, tile_size)
         }
         Mode::Random => {
@@ -148,6 +191,7 @@ fn main() {
                 let tile = Tile::<()>::new(path_buf, ());
                 tile_set.push(tile);
             }
+            eprintln!("Tile set with {} tiles", tile_set.len());
             render_random(&img, &tile_set, tile_size)
         }
     };
