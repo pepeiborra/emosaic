@@ -325,6 +325,10 @@ pub fn prepare_tile(
         let w = tile_img.width();
         let h = tile_img.height();
 
+        if w < tile_size || h < tile_size {
+            return Err(::image::ImageError::DimensionError);
+        }
+
         let from_left: Vec<u32> = (0..h)
             .map(|y| {
                 (0..w)
