@@ -1,4 +1,3 @@
-#![feature(entry_insert)]
 #![feature(generic_const_exprs)]
 #![feature(type_changing_struct_update)]
 mod mosaic;
