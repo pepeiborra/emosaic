@@ -304,12 +304,12 @@ where
                 .unwrap(),
         );
 
-    let compute_nearest = |n: u32| {
+    let compute_nearest = |n: u32, k| {
         let x = n / vtiles * step;
         let y = n % vtiles * step;
         let tile = Tile::from_colors(get_img_colors(x, y, step, source_img));
         let coords = tile.coords();
-        let mut nearest = kdtree.read().unwrap().nearest_n::<Manhattan>(&coords, 10);
+        let mut nearest = kdtree.read().unwrap().nearest_n::<Manhattan>(&coords, k);
         nearest.reverse();
         nearest
     };
@@ -317,7 +317,7 @@ where
     let mut matches: Vec<_> = (0..htiles * vtiles)
         .into_par_iter()
         .inspect(|_| pb.inc(1))
-        .map(|n| (n, compute_nearest(n)))
+        .map(|n| (n, compute_nearest(n, 100000)))
         .collect();
 
     // sort matches by nearest score, reversed as we pop from the end
@@ -381,7 +381,7 @@ where
             pb.inc(1);
         } else {
             if nearest.is_empty() {
-                nearest = compute_nearest(n);
+                nearest = compute_nearest(n, 10);
             }
             // ordered reinsert of nearest in matches
             match matches.binary_search_by(|(_, x)| compare_matches(&nearest, x)) {
@@ -400,20 +400,19 @@ where
     })
 }
 
-
 /// Renders a mosaic with completely random tile selection.
-/// 
+///
 /// This function creates a mosaic by placing random tiles at each position,
 /// without considering color matching or tile optimization.
-/// 
+///
 /// # Arguments
 /// * `source_img` - The source image (used only for dimensions)
 /// * `tile_set` - Set of available tiles (no color analysis needed)
 /// * `tile_size` - Size of each output tile in pixels
-/// 
+///
 /// # Returns
 /// A new `RgbImage` containing the random tile mosaic
-/// 
+///
 /// # Performance
 /// This is the fastest rendering method but produces the lowest visual quality.
 pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u32) -> RgbImage {
