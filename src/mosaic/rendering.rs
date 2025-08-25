@@ -10,13 +10,12 @@ use rand::prelude::IteratorRandom;
 use rand::prelude::SliceRandom;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 
-use super::analysis::get_img_colors;
 use super::algorithms::compare_matches;
+use super::analysis::get_img_colors;
 use super::error::ImageError;
 use super::stats::RenderStats;
 use super::tiles::{flipped_coords, Tile, TileSet};
 use fixed::traits::FromFixed;
-
 
 /// Configuration for rendering operations
 #[derive(Debug, Clone)]
@@ -37,16 +36,16 @@ impl Default for RenderConfig {
 }
 
 /// Core rendering function that creates a mosaic by applying tiles to segments of the source image.
-/// 
+///
 /// This function processes the image in parallel, dividing it into segments and applying
 /// tiles based on the provided tile generation function.
-/// 
+///
 /// # Arguments
 /// * `source_img` - The source image to create a mosaic from
 /// * `tile_size` - Size of each tile in pixels
 /// * `step` - Step size for tile placement (affects tile density)
 /// * `get_tile` - Function that generates a tile image for given coordinates
-/// 
+///
 /// # Returns
 /// A new `RgbImage` containing the rendered mosaic
 pub fn render(
@@ -102,21 +101,21 @@ pub fn render(
 }
 
 /// Renders a mosaic using N-to-1 tile matching with KD-tree optimization.
-/// 
+///
 /// This function analyzes the source image in N-pixel blocks and finds the best matching
 /// tiles from the tile set using nearest neighbor search in color space.
-/// 
+///
 /// # Arguments
 /// * `source_img` - The source image to create a mosaic from
 /// * `tile_set` - Set of available tiles with pre-computed color analysis
 /// * `tile_size` - Size of each output tile in pixels
 /// * `no_repeat` - If true, prevents tiles from being used multiple times
 /// * `randomize` - Optional randomization factor (0-100%) for tile selection
-/// 
+///
 /// # Returns
 /// * `Ok(RenderResult)` - Contains the rendered image, statistics, and tile set
 /// * `Err(RenderError)` - If rendering fails due to insufficient tiles or other errors
-/// 
+///
 /// # Examples
 /// ```
 /// use emosaic::mosaic::rendering::render_nto1;
@@ -150,8 +149,8 @@ where
 
     if no_repeat && (htiles * vtiles) as usize > tile_set.len() * 2 {
         panic!(
-            "❌ Insufficient tiles for no-repeat mode: need {} tiles but only have {} available", 
-            (htiles * vtiles) as usize, 
+            "❌ Insufficient tiles for no-repeat mode: need {} tiles but only have {} available",
+            (htiles * vtiles) as usize,
             tile_set.len() * 2
         );
     }
@@ -214,7 +213,10 @@ where
             .unwrap()
             .push_tile(x, y, &tile, closest.distance);
         tile_set.get_image(&tile, tile_size).unwrap_or_else(|_| {
-            panic!("Image not found: {}", tile_set.get_path(&tile).to_str().unwrap())
+            panic!(
+                "Image not found: {}",
+                tile_set.get_path(&tile).to_str().unwrap()
+            )
         })
     });
 
@@ -228,7 +230,7 @@ where
 }
 
 /// Result of a rendering operation containing the output image and metadata.
-/// 
+///
 /// This struct encapsulates the complete result of a mosaic rendering operation,
 /// including the final image, rendering statistics, and the tile set used.
 pub struct RenderResult<const N: usize> {
@@ -241,19 +243,19 @@ pub struct RenderResult<const N: usize> {
 }
 
 /// Renders a mosaic with no tile repetition using an optimized greedy algorithm.
-/// 
+///
 /// This function uses a more sophisticated algorithm that pre-computes all tile matches,
 /// sorts them by quality, and selects tiles in order while ensuring no repeats.
-/// 
+///
 /// # Arguments
 /// * `source_img` - The source image to create a mosaic from
 /// * `tile_set` - Set of available tiles with pre-computed color analysis
 /// * `tile_size` - Size of each output tile in pixels
-/// 
+///
 /// # Returns
 /// * `Ok(RenderResult)` - Contains the rendered image, statistics, and tile set
 /// * `Err(ImageError)` - If rendering fails due to image processing errors
-/// 
+///
 /// # Performance
 /// This algorithm is more computationally expensive than `render_nto1` but produces
 /// higher quality results when tile uniqueness is required.
@@ -285,8 +287,8 @@ where
 
     if (htiles * vtiles) as usize > tile_set.len() * 2 {
         panic!(
-            "❌ Insufficient tiles for no-repeat mode: need {} tiles but only have {} available", 
-            (htiles * vtiles) as usize, 
+            "❌ Insufficient tiles for no-repeat mode: need {} tiles but only have {} available",
+            (htiles * vtiles) as usize,
             tile_set.len() * 2
         );
     }
@@ -319,7 +321,9 @@ where
         .collect();
 
     // sort matches by nearest score, reversed as we pop from the end
-    matches.sort_unstable_by(|(_, a), (_, b)| compare_matches(a, b));
+    matches.sort_unstable_by(|(_, a), (_, b)| {
+        b.last().unwrap().distance.cmp(&a.last().unwrap().distance)
+    });
 
     let mut image = RgbImage::new(
         source_img.width() * tile_size_stepped,
