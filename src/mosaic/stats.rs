@@ -346,6 +346,9 @@ where
             }}
         }});
 
+        // Store original percentage values to avoid conversion errors
+        let originalPositions = new Map();
+
         // Adjust positioning when image loads or window resizes
         function adjustMosaicLayout() {{
             const image = document.querySelector('.mosaic-image');
@@ -364,7 +367,7 @@ where
             const offsetX = imageRect.left - containerRect.left;
             const offsetY = imageRect.top - containerRect.top;
 
-            // Update overlay dimensions and position
+            // Update overlay dimensions and position to match the image exactly
             if (overlay) {{
                 overlay.style.left = offsetX + 'px';
                 overlay.style.top = offsetY + 'px';
@@ -372,19 +375,38 @@ where
                 overlay.style.height = imageRect.height + 'px';
             }}
 
-            // Update tile regions and overlay tiles positioning
-            [...tileRegions, ...overlayTiles].forEach(element => {{
-                const currentLeft = parseFloat(element.style.left) || 0;
-                const currentTop = parseFloat(element.style.top) || 0;
-                const currentWidth = parseFloat(element.style.width) || 0;
-                const currentHeight = parseFloat(element.style.height) || 0;
+            // Store original percentage values on first run (only for tile regions, not overlay tiles)
+            if (originalPositions.size === 0) {{
+                [...tileRegions].forEach(element => {{
+                    const leftPercent = parseFloat(element.style.left) || 0;
+                    const topPercent = parseFloat(element.style.top) || 0;
+                    const widthPercent = parseFloat(element.style.width) || 0;
+                    const heightPercent = parseFloat(element.style.height) || 0;
+
+                    originalPositions.set(element, {{
+                        left: leftPercent,
+                        top: topPercent,
+                        width: widthPercent,
+                        height: heightPercent
+                    }});
+                }});
+            }}
+
+            // Update tile regions positioning using stored percentages (convert to pixels relative to image)
+            [...tileRegions].forEach(element => {{
+                const original = originalPositions.get(element);
+                if (!original) return;
 
                 // Convert percentages to actual pixels relative to image
-                element.style.left = offsetX + (currentLeft / 100) * imageRect.width + 'px';
-                element.style.top = offsetY + (currentTop / 100) * imageRect.height + 'px';
-                element.style.width = (currentWidth / 100) * imageRect.width + 'px';
-                element.style.height = (currentHeight / 100) * imageRect.height + 'px';
+                element.style.left = offsetX + (original.left / 100) * imageRect.width + 'px';
+                element.style.top = offsetY + (original.top / 100) * imageRect.height + 'px';
+                element.style.width = (original.width / 100) * imageRect.width + 'px';
+                element.style.height = (original.height / 100) * imageRect.height + 'px';
             }});
+            
+            // Distance overlay tiles should keep their percentage positioning relative to the overlay container
+            // Since the overlay container is already positioned and sized to match the image,
+            // the tiles inside should maintain their original percentage positions
         }}
 
         // Adjust layout when image loads and on window resize

@@ -221,7 +221,15 @@ fn get_exif_date(file_path: &Path) -> Option<String> {
                     // Convert bytes to string, handling potential encoding issues
                     return String::from_utf8(first_value.to_vec())
                         .ok()
-                        .map(|s| s.trim_end_matches('\0').to_string());
+                        .map(|s| s.trim_end_matches('\0').to_string())
+                        .map(|s| {
+                            // Extract only the date part, remove time if present
+                            if let Some(space_pos) = s.find(' ') {
+                                s[..space_pos].to_string()
+                            } else {
+                                s
+                            }
+                        });
                 }
             }
         }
@@ -290,5 +298,27 @@ mod tests {
         assert_eq!(coords, [4, 5, 6, 1, 2, 3, 10, 11, 12, 7, 8, 9]);
         flipped_coords(&mut coords);
         assert_eq!(coords, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    }
+
+    #[test]
+    fn test_exif_date_extraction() {
+        // Test the date extraction logic (simulating what happens in get_exif_date)
+        let full_datetime = "2003:03:19 11:44:30\0";
+        let trimmed = full_datetime.trim_end_matches('\0').to_string();
+        let date_only = if let Some(space_pos) = trimmed.find(' ') {
+            trimmed[..space_pos].to_string()
+        } else {
+            trimmed
+        };
+        assert_eq!(date_only, "2003:03:19");
+        
+        // Test date-only input (no time part)
+        let date_only_input = "2003:03:19";
+        let result = if let Some(space_pos) = date_only_input.find(' ') {
+            date_only_input[..space_pos].to_string()
+        } else {
+            date_only_input.to_string()
+        };
+        assert_eq!(result, "2003:03:19");
     }
 }

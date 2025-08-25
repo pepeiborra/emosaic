@@ -9,7 +9,10 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::create_dir_all;
 use std::path::{Path, PathBuf};
-use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, RwLock};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, RwLock,
+};
 use std::time::{Duration, Instant};
 use std::{fs, io, thread};
 
@@ -155,10 +158,10 @@ impl MemoryMonitor {
     fn start() -> Self {
         let peak_rss_kb = Arc::new(AtomicU64::new(0));
         let shutdown = Arc::new(AtomicBool::new(false));
-        
+
         let peak_rss_kb_clone = Arc::clone(&peak_rss_kb);
         let shutdown_clone = Arc::clone(&shutdown);
-        
+
         let handle = thread::spawn(move || {
             while !shutdown_clone.load(Ordering::Relaxed) {
                 if let Some(current_rss_kb) = get_current_rss_kb() {
@@ -166,10 +169,10 @@ impl MemoryMonitor {
                     let mut current_peak = peak_rss_kb_clone.load(Ordering::Relaxed);
                     while current_rss_kb > current_peak {
                         match peak_rss_kb_clone.compare_exchange_weak(
-                            current_peak, 
-                            current_rss_kb, 
-                            Ordering::Relaxed, 
-                            Ordering::Relaxed
+                            current_peak,
+                            current_rss_kb,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
                         ) {
                             Ok(_) => break,
                             Err(updated_peak) => current_peak = updated_peak,
@@ -179,14 +182,14 @@ impl MemoryMonitor {
                 thread::sleep(Duration::from_millis(100)); // Check every 100ms
             }
         });
-        
+
         Self {
             peak_rss_kb,
             shutdown,
             _handle: handle,
         }
     }
-    
+
     /// Get the peak memory usage in MB
     fn get_peak_mb(&self) -> String {
         let peak_kb = self.peak_rss_kb.load(Ordering::Relaxed);
@@ -214,11 +217,11 @@ fn get_current_rss_kb() -> Option<u64> {
             .arg(std::process::id().to_string())
             .output()
             .ok()?;
-            
+
         let rss_str = String::from_utf8(output.stdout).ok()?;
         rss_str.trim().parse::<u64>().ok()
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         let status = std::fs::read_to_string("/proc/self/status").ok()?;
@@ -232,7 +235,7 @@ fn get_current_rss_kb() -> Option<u64> {
         }
         None
     }
-    
+
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         None
@@ -604,19 +607,24 @@ where
         .and_then(|bytes| bincode::deserialize::<TileSet<[Rgb<u8>; N]>>(&bytes).ok())
         .map(|analysis| {
             eprintln!("Reusing analysis cache");
-            analysis
+            // Filter out tiles for files that no longer exist or don't match extensions
+            let valid_data: Vec<_> = analysis
                 .tiles
                 .par_iter()
                 .filter_map(|tile| {
                     let path = analysis.get_path(tile);
                     let extension = path.extension()?.to_str()?;
                     if path.exists() && extensions.contains(extension) {
-                        Some((path.to_owned(), tile.colors))
+                        Some((path.to_owned(), tile.clone()))
                     } else {
                         None
                     }
                 })
-                .collect()
+                .collect();
+            
+            // Create new TileSet from valid tiles, preserving date_taken
+            let (paths, tiles): (Vec<PathBuf>, Vec<Tile<[Rgb<u8>; N]>>) = valid_data.into_iter().unzip();
+            TileSet::from_tiles(tiles, paths)
         })
         .unwrap_or_else(|| {
             let extensions = extensions.iter().map(OsString::from).collect();
@@ -704,6 +712,11 @@ where
         })
         .collect();
 
+    let dates = tile_data
+        .iter()
+        .filter(|(_, _, date)| date.is_some())
+        .count();
+
     // Create tiles with date information
     let tiles: Vec<_> = tile_data
         .into_iter()
@@ -728,7 +741,7 @@ where
     }
 
     summarise_tileset(&tile_set);
-
+    eprintln!("Extracted {} dates successfully", dates);
     Ok(tile_set)
 }
 
