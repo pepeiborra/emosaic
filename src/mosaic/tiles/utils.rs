@@ -47,7 +47,13 @@ pub fn prepare_tile_with_date(
     path: &Path,
     tile_size: u32,
     crop: bool,
-) -> Result<(::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>, Option<String>), ImageError> {
+) -> Result<
+    (
+        ::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>,
+        Option<String>,
+    ),
+    ImageError,
+> {
     let date_taken = get_exif_date(path);
     let image = prepare_tile(path, tile_size, crop)?;
     Ok((image, date_taken))
@@ -172,7 +178,12 @@ pub fn prepare_tile(
             let size = w.min(h);
             let x0 = (w - size).div(2);
             let y0 = (h - size).div(2);
-            tile_img.change_bounds(x0, y0, size, size);
+            tile_img.change_bounds(
+                first_non_white_col + x0,
+                first_non_white_row + y0,
+                size,
+                size,
+            );
         }
 
         let tile_img =
@@ -206,14 +217,10 @@ fn get_exif_date(file_path: &Path) -> Option<String> {
     let mut bufreader = std::io::BufReader::new(&file);
     let exifreader = exif::Reader::new();
     let exif = exifreader.read_from_container(&mut bufreader).ok()?;
-    
+
     // Try different date tags in order of preference
-    let date_tags = [
-        Tag::DateTimeOriginal,
-        Tag::DateTime,
-        Tag::DateTimeDigitized,
-    ];
-    
+    let date_tags = [Tag::DateTimeOriginal, Tag::DateTime, Tag::DateTimeDigitized];
+
     for tag in date_tags.iter() {
         if let Some(field) = exif.get_field(*tag, In::PRIMARY) {
             if let exif::Value::Ascii(values) = &field.value {
@@ -234,7 +241,7 @@ fn get_exif_date(file_path: &Path) -> Option<String> {
             }
         }
     }
-    
+
     None
 }
 
