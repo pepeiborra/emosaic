@@ -18,7 +18,7 @@ use image::{imageops, DynamicImage, ImageFormat, Rgb, Rgba, RgbaImage};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
-use mosaic::tiles::{prepare_tile, TileSet};
+use mosaic::tiles::{prepare_tile, prepare_tile_with_date, Tile, TileSet};
 use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
@@ -684,15 +684,15 @@ where
         );
 
     let errors: RwLock<Vec<ImageError>> = RwLock::new(vec![]);
-    let tile_set: TileSet<_> = images_paths
+    let tile_data: Vec<_> = images_paths
         .into_par_iter()
         .map(|path| {
-            let img = prepare_tile(&path, tile_size, crop);
-            (path, img)
+            let img_and_date = prepare_tile_with_date(&path, tile_size, crop);
+            (path, img_and_date)
         })
         .inspect(move |_| pb.inc(1))
         .filter_map(|x| match x {
-            (path, Ok(x)) => Some((path, analyse::<N>(x))),
+            (path, Ok((img, date_taken))) => Some((path, img, date_taken)),
             (path, Err(error)) => {
                 let path = path.strip_prefix(tiles_path).unwrap();
                 errors.write().unwrap().push(ImageError {
@@ -703,6 +703,22 @@ where
             }
         })
         .collect();
+
+    // Create tiles with date information
+    let tiles: Vec<_> = tile_data
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (path, img, date_taken))| {
+            let colors = analyse::<N>(img);
+            let tile = Tile::new_with_date((idx + 1) as u16, colors, date_taken);
+            (path, tile)
+        })
+        .collect();
+
+    let tile_set = TileSet::from_tiles(
+        tiles.iter().map(|(_, tile)| tile.clone()).collect(),
+        tiles.into_iter().map(|(path, _)| path).collect(),
+    );
     let all_errors = errors.into_inner().unwrap();
     if !all_errors.is_empty() {
         eprintln!("Failed to read the following images({}):", all_errors.len());

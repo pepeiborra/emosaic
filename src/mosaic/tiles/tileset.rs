@@ -133,10 +133,12 @@ impl<T> TileSet<T> {
         T: Copy,
     {
         let tile = self.tiles.get(idx.abs() as usize - 1).map(|tile| Tile {
+            colors: tile.colors,
+            idx: tile.idx,
             flipped: idx < 0,
-            ..*tile
+            date_taken: tile.date_taken.clone(),
         });
-        assert!(tile.map_or(true, |t| t.idx == idx.abs() as u16));
+        assert!(tile.as_ref().map_or(true, |t| t.idx == idx.abs() as u16));
         tile
     }
 

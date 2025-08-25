@@ -42,6 +42,17 @@ pub fn flipped_coords<A, const N: usize>(coords: &mut [A; N]) {
     }
 }
 
+/// Prepare a tile image by resizing, cropping, and caching it, and extract date information.
+pub fn prepare_tile_with_date(
+    path: &Path,
+    tile_size: u32,
+    crop: bool,
+) -> Result<(::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>, Option<String>), ImageError> {
+    let date_taken = get_exif_date(path);
+    let image = prepare_tile(path, tile_size, crop)?;
+    Ok((image, date_taken))
+}
+
 /// Prepare a tile image by resizing, cropping, and caching it.
 pub fn prepare_tile(
     path: &Path,
@@ -187,6 +198,36 @@ fn get_jpeg_orientation(file_path: &Path) -> Result<u32, exif::Error> {
     };
 
     Ok(orientation)
+}
+
+/// Extract EXIF date information from an image file.
+fn get_exif_date(file_path: &Path) -> Option<String> {
+    let file = std::fs::File::open(file_path).ok()?;
+    let mut bufreader = std::io::BufReader::new(&file);
+    let exifreader = exif::Reader::new();
+    let exif = exifreader.read_from_container(&mut bufreader).ok()?;
+    
+    // Try different date tags in order of preference
+    let date_tags = [
+        Tag::DateTimeOriginal,
+        Tag::DateTime,
+        Tag::DateTimeDigitized,
+    ];
+    
+    for tag in date_tags.iter() {
+        if let Some(field) = exif.get_field(*tag, In::PRIMARY) {
+            if let exif::Value::Ascii(values) = &field.value {
+                if let Some(first_value) = values.first() {
+                    // Convert bytes to string, handling potential encoding issues
+                    return String::from_utf8(first_value.to_vec())
+                        .ok()
+                        .map(|s| s.trim_end_matches('\0').to_string());
+                }
+            }
+        }
+    }
+    
+    None
 }
 
 fn rotate(mut img: DynamicImage, orientation: u32) -> DynamicImage {

@@ -12,6 +12,7 @@ pub struct Tile<T> {
     pub colors: T,
     pub idx: u16,
     pub flipped: bool,
+    pub date_taken: Option<String>,
 }
 
 impl<T> PartialEq for Tile<T> {
@@ -27,7 +28,6 @@ impl<T> Hash for Tile<T> {
     }
 }
 
-impl<T: Copy> Copy for Tile<T> {}
 
 impl<T: Default> Default for Tile<T> {
     fn default() -> Self {
@@ -43,9 +43,10 @@ where
     where
         S: serde::Serializer,
     {
-        let mut st = serializer.serialize_tuple(2)?;
+        let mut st = serializer.serialize_tuple(3)?;
         st.serialize_element(&self.colors)?;
         st.serialize_element(&self.idx)?;
+        st.serialize_element(&self.date_taken)?;
         st.end()
     }
 }
@@ -58,8 +59,8 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        let (colors, idx) = Deserialize::deserialize(deserializer)?;
-        Ok(Tile::new(idx, colors))
+        let (colors, idx, date_taken): (T, u16, Option<String>) = Deserialize::deserialize(deserializer)?;
+        Ok(Tile::new_with_date(idx, colors, date_taken))
     }
 }
 
@@ -75,6 +76,17 @@ impl<T> Tile<T> {
             idx,
             colors,
             flipped: false,
+            date_taken: None,
+        }
+    }
+    
+    /// Create a new tile with the given index, colors, and date.
+    pub(crate) fn new_with_date(idx: u16, colors: T, date_taken: Option<String>) -> Tile<T> {
+        Tile {
+            idx,
+            colors,
+            flipped: false,
+            date_taken,
         }
     }
 
@@ -82,7 +94,9 @@ impl<T> Tile<T> {
     pub fn map<T1>(self, f: impl FnOnce(T) -> T1) -> Tile<T1> {
         Tile {
             colors: f(self.colors),
-            ..self
+            idx: self.idx,
+            flipped: self.flipped,
+            date_taken: self.date_taken,
         }
     }
 }

@@ -42,7 +42,9 @@ where
     pub fn push_tile<T>(&mut self, x: u32, y: u32, tile: &Tile<T>, distance: D) {
         let stats_tile = Tile {
             colors: distance, // Note: repurposing colors field to store distance
-            ..*tile
+            idx: tile.idx,
+            flipped: tile.flipped,
+            date_taken: tile.date_taken.clone(),
         };
         self.tiles.insert((x, y), stats_tile);
     }
@@ -261,6 +263,16 @@ where
             max-width: 1500px;
             word-wrap: break-word;
             white-space: normal;
+        }}
+        .tooltip-image {{
+            display: block;
+            max-width: 25vw;
+            max-height: 25vh;
+            width: auto;
+            height: auto;
+            margin: 8px 0;
+            border-radius: 4px;
+            object-fit: contain;
         }}
         .tile-region:hover .tooltip {{
             opacity: 1;
@@ -539,18 +551,38 @@ where
                 .replace("'", "\\'")
                 .replace("\"", "\\\"");
 
+            // Create absolute path for the image source
+            let absolute_tile_path = if tile_path.is_absolute() {
+                tile_path.to_path_buf()
+            } else {
+                cwd.join(tile_path)
+            };
+            
+            // Convert to file URL for browser (need to URL encode for safety)
+            let file_url = format!("file://{}", absolute_tile_path.display());
+
+            // Format date information
+            let date_info = if let Some(ref date_taken) = tile.date_taken {
+                format!("Date: {}<br/>", date_taken)
+            } else {
+                String::new()
+            };
+
             html.push_str(&format!(r#"
             <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" onclick="openTileImage('{}', '{}')">
                 <div class="tooltip">
+                    <img src="{}" alt="Tile Preview" class="tooltip-image" onerror="this.style.display='none'"/><br/>
                     <strong>Tile Information</strong><br/>
                     Position: ({}, {})<br/>
                     <span class="{}">Distance: {:.3}</span><br/>
                     Flipped: {}<br/>
-                    Path: {} <em>(click to open)</em>
+                    {}Path: {} <em>(click to open)</em>
                 </div>
             </div>"#,
                 left_percent, top_percent, width_percent, height_percent, escaped_path, escaped_cwd,
+                file_url,
                 x, y, distance_class, distance, tile.flipped,
+                date_info,
                 tile_path.display()
             ));
         }
