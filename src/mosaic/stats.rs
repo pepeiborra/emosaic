@@ -215,6 +215,23 @@ where
             ));
         }
 
+        // Extract years from tiles for year filter
+        let mut years: Vec<i32> = Vec::new();
+        for tile in self.tiles.values() {
+            if let Some(ref date_taken) = tile.date_taken {
+                if let Some(year_str) = date_taken.split('-').next() {
+                    if let Ok(year) = year_str.parse::<i32>() {
+                        if !years.contains(&year) {
+                            years.push(year);
+                        }
+                    }
+                }
+            }
+        }
+        years.sort();
+        let min_year = years.first().copied().unwrap_or(2000);
+        let max_year = years.last().copied().unwrap_or(2030);
+
         let mut html = String::new();
 
         // Minimal HTML document structure for widget
@@ -394,20 +411,163 @@ where
         }}
 
         @keyframes slideUp {{
-            from {{ 
+            from {{
                 opacity: 0;
                 transform: translateY(20px);
             }}
-            to {{ 
+            to {{
                 opacity: 1;
                 transform: translateY(0);
             }}
         }}
 
-        /* Hide tooltips on mobile */
-        @media (max-width: 768px), (hover: none) {{
+        /* Hide tooltips on mobile devices only */
+        @media (max-width: 768px) and (hover: none) {{
             .tooltip {{
                 display: none !important;
+            }}
+        }}
+
+        /* Ensure tooltips work on desktop */
+        @media (min-width: 769px) and (hover: hover) {{
+            .tile-region:hover .tooltip {{
+                opacity: 1 !important;
+            }}
+        }}
+
+        /* Year Filter Styles */
+        .year-filter-container {{
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            border: 1px solid #ddd;
+            z-index: 100;
+            font-family: Arial, sans-serif;
+            min-width: 200px;
+        }}
+
+        .year-filter-label {{
+            display: block;
+            font-size: 14px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }}
+
+        .year-slider-wrapper {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }}
+
+        .year-slider {{
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: #ddd;
+            outline: none;
+            -webkit-appearance: none;
+            cursor: pointer;
+        }}
+
+        .year-slider::-webkit-slider-thumb {{
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #007bff;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }}
+
+        .year-slider::-moz-range-thumb {{
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #007bff;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }}
+
+        .year-display {{
+            font-size: 16px;
+            font-weight: bold;
+            color: #007bff;
+            text-align: center;
+            min-height: 20px;
+        }}
+
+        /* Disabled tile styles - overlay effect */
+        .tile-region.disabled {{
+            pointer-events: none;
+            background-color: rgba(0, 0, 0, 0.7);
+            transition: background-color 0.2s ease;
+        }}
+
+        .tile-region.disabled::before {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                45deg,
+                rgba(0, 0, 0, 0.1),
+                rgba(0, 0, 0, 0.1) 2px,
+                transparent 2px,
+                transparent 8px
+            );
+            z-index: 1;
+        }}
+
+        .tile-region.disabled:hover {{
+            background-color: rgba(0, 0, 0, 0.7) !important;
+            border: none !important;
+            transform: none !important;
+        }}
+
+        /* Ensure non-disabled tiles still show tooltips */
+        .tile-region:not(.disabled):hover .tooltip {{
+            opacity: 1;
+        }}
+
+        /* Enabled tiles should have a subtle highlight effect */
+        .tile-region:not(.disabled) {{
+            transition: background-color 0.2s ease, border 0.2s ease;
+            background-color: transparent;
+        }}
+
+        .tile-region:not(.disabled):hover {{
+            background-color: rgba(255, 255, 0, 0.3);
+            border: 2px solid #ffcc00;
+            z-index: 5;
+        }}
+
+        /* Mobile responsive adjustments for year filter */
+        @media (max-width: 768px) {{
+            .year-filter-container {{
+                top: 10px;
+                right: 10px;
+                left: 10px;
+                min-width: auto;
+                padding: 12px 15px;
+            }}
+
+            .year-filter-label {{
+                font-size: 12px;
+                margin-bottom: 8px;
+            }}
+
+            .year-display {{
+                font-size: 14px;
             }}
         }}
     </style>
@@ -529,14 +689,18 @@ where
 
         // Adjust layout when image loads and on window resize
         window.addEventListener('load', function() {{
+            console.log('Window loaded, initializing features...');
             adjustMosaicLayout();
             setupModalEvents();
+            setupYearFilter();
+            console.log('All features initialized');
         }});
         window.addEventListener('resize', adjustMosaicLayout);
 
         function loadTooltipImage(tileRegion) {{
             const img = tileRegion.querySelector('.tooltip-image');
             if (img && img.dataset.src && !img.src) {{
+                console.log('Loading tooltip image for tile');
                 img.src = img.dataset.src;
                 img.style.display = 'block';
             }}
@@ -554,13 +718,13 @@ where
             const modal = document.getElementById('mobile-modal');
             const modalImage = document.getElementById('modal-image');
             const modalInfo = document.getElementById('modal-info');
-            
+
             if (!modal || !modalImage || !modalInfo) return;
-            
+
             modalImage.src = imageUrl;
             modalInfo.innerHTML = distanceInfo + dateInfo;
             modal.classList.add('active');
-            
+
             // Prevent body scrolling when modal is open
             document.body.style.overflow = 'hidden';
         }}
@@ -585,6 +749,79 @@ where
             }}
         }}
 
+        // Year filter functionality
+        var yearFilterMinYear = {min_year}
+        var yearFilterMaxYear = {max_year}
+
+        function setupYearFilter() {{
+            const slider = document.getElementById('year-slider');
+            const display = document.getElementById('year-display');
+
+            if (!slider || !display) {{
+                console.log('Year filter elements not found');
+                return;
+            }}
+
+            console.log('Setting up year filter with range:', yearFilterMinYear, 'to', yearFilterMaxYear);
+
+            // Set slider range: 0 = "All", 1 to N = specific years
+            slider.min = '0';
+            slider.max = String(yearFilterMaxYear - yearFilterMinYear + 1);
+            slider.value = '0'; // Default to "All"
+
+            console.log('Slider range set to 0 -', slider.max);
+
+            slider.addEventListener('input', function() {{
+                const value = parseInt(this.value);
+                console.log('Slider value changed to:', value);
+                updateYearFilter(value);
+            }});
+        }}
+
+        function updateYearFilter(sliderValue) {{
+            const display = document.getElementById('year-display');
+            const tiles = document.querySelectorAll('.tile-region');
+
+            if (!display || !tiles.length) {{
+                console.log('Display or tiles not found for year filter');
+                return;
+            }}
+
+            console.log('Updating year filter with value:', sliderValue, 'Total tiles:', tiles.length);
+
+            if (sliderValue === 0) {{
+                // Show all tiles
+                display.textContent = 'All Years';
+                tiles.forEach(tile => {{
+                    if (tile.classList.contains('disabled')) {{
+                        tile.classList.remove('disabled');
+                    }}
+                }});
+                console.log('Showing all tiles');
+            }} else {{
+                // Filter by specific year
+                const selectedYear = yearFilterMinYear + sliderValue - 1;
+                display.textContent = String(selectedYear);
+                console.log('Filtering by year:', selectedYear);
+
+                let enabledCount = 0;
+                let disabledCount = 0;
+
+                tiles.forEach(tile => {{
+                    const tileYear = tile.dataset.year;
+                    if (tileYear === 'unknown' || parseInt(tileYear) !== selectedYear) {{
+                            tile.classList.add('disabled');
+                        disabledCount++;
+                    }} else {{
+                            tile.classList.remove('disabled');
+                        enabledCount++;
+                    }}
+                }});
+
+                console.log('Year filter results - Enabled:', enabledCount, 'Disabled:', disabledCount);
+            }}
+        }}
+
         // Make functions globally accessible
         window.toggleDistanceOverlay = toggleDistanceOverlay;
         window.openTileImage = openTileImage;
@@ -593,17 +830,21 @@ where
         window.handleTileClick = handleTileClick;
         window.showMobileModal = showMobileModal;
         window.closeMobileModal = closeMobileModal;
+        window.setupYearFilter = setupYearFilter;
+        window.updateYearFilter = updateYearFilter;
     </script>
 </head>
 <body>
     <div class="mosaic-container">
-        <img src="{}" alt="Mosaic Image" class="mosaic-image" />
+        <img src="{img_path}" alt="Mosaic Image" class="mosaic-image" />
         <div id="distance-overlay" class="distance-overlay">
 "#,
-            mosaic_image_path
+            img_path = mosaic_image_path
                 .file_name()
                 .unwrap_or_default()
-                .to_string_lossy()
+                .to_string_lossy(),
+            min_year = min_year,
+            max_year = max_year
         ));
 
         // Calculate image dimensions and tile positions
@@ -731,11 +972,16 @@ where
                 (escaped_path, file_url, "false")
             };
 
-            // Format date information
-            let date_info = if let Some(ref date_taken) = tile.date_taken {
-                format!("{}", date_taken)
+            // Format date information and extract year
+            let (date_info, tile_year) = if let Some(ref date_taken) = tile.date_taken {
+                let year = date_taken
+                    .split(':')
+                    .next()
+                    .and_then(|y| y.parse::<i32>().ok())
+                    .unwrap_or(0);
+                (date_taken.clone(), year.to_string())
             } else {
-                String::new()
+                (String::new(), "unknown".to_string())
             };
 
             let distance_info = if web_compatible {
@@ -748,25 +994,27 @@ where
             };
 
             html.push_str(&format!(r#"
-        <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" 
-             onclick="handleTileClick('{}', {}, this, '{}', '{}', '{}')" 
+        <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;"
+             onclick="handleTileClick('{}', {}, this, '{}', '{}', '{}')"
              onmouseenter="loadTooltipImage(this)"
              data-tile-image="{}"
              data-distance-info="{}"
-             data-date-info="{}">
+             data-date-info="{}"
+             data-year="{}">
             <div class="tooltip">
                 <img data-src="{}" alt="Tile Preview" class="tooltip-image" onerror="this.style.display='none'" style="display:none"/><br/>
                 {}
                 {}
             </div>
         </div>"#,
-                left_percent, top_percent, width_percent, height_percent, 
-                click_url, web_compat_flag, tooltip_image_url, 
+                left_percent, top_percent, width_percent, height_percent,
+                click_url, web_compat_flag, tooltip_image_url,
                 distance_info.replace("\"", "&quot;").replace("'", "&#39;"),
                 date_info.replace("\"", "&quot;").replace("'", "&#39;"),
                 tooltip_image_url,
                 distance_info.replace("\"", "&quot;").replace("'", "&#39;"),
                 date_info.replace("\"", "&quot;").replace("'", "&#39;"),
+                tile_year,
                 tooltip_image_url,
                 distance_info,
                 date_info
@@ -775,8 +1023,26 @@ where
 
         html.push_str("    </div>\n");
 
+        // Add year filter slider HTML
+        html.push_str(&format!(
+            r#"
+    <!-- Year Filter -->
+    <div id="year-filter-container" class="year-filter-container">
+        <label for="year-slider" class="year-filter-label">Filter by Year:</label>
+        <div class="year-slider-wrapper">
+            <input type="range" id="year-slider" class="year-slider"
+                   min="{}" max="{}" value="0" step="1" />
+            <div id="year-display" class="year-display">All Years</div>
+        </div>
+    </div>
+"#,
+            min_year,
+            max_year + 1
+        )); // +1 for "All" position
+
         // Add mobile modal HTML
-        html.push_str(r#"
+        html.push_str(
+            r#"
     <!-- Mobile Modal -->
     <div id="mobile-modal" class="mobile-modal">
         <div class="modal-content">
@@ -785,7 +1051,8 @@ where
             <div id="modal-info" class="modal-info"></div>
         </div>
     </div>
-"#);
+"#,
+        );
 
         // Close HTML document
         html.push_str(
