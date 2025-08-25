@@ -173,21 +173,21 @@ where
         image
     }
 
-    /// Generate an HTML file with the mosaic image and interactive tooltips.
+    /// Generate a standalone HTML widget containing only the mosaic container.
     ///
-    /// Creates an HTML document embedding the mosaic image with CSS-based tooltips
-    /// that appear on hover, showing tile distance scores and original file paths.
+    /// Creates a self-contained HTML document with just the interactive mosaic
+    /// that can be embedded in other pages or used independently.
     ///
     /// # Arguments
     /// * `mosaic_image_path` - Path to the generated mosaic JPEG image
-    /// * `output_path` - Path where the HTML file should be written
+    /// * `output_path` - Path where the widget HTML file should be written
     /// * `tile_set` - The tile set used for generating the mosaic
     /// * `tile_size` - Size of each tile in pixels for coordinate conversion
     ///
     /// # Returns
-    /// * `Ok(())` - If HTML file was successfully generated
+    /// * `Ok(())` - If widget HTML file was successfully generated
     /// * `Err(std::io::Error)` - If file writing failed
-    pub fn generate_html<T>(
+    pub fn generate_mosaic_widget<T>(
         &self,
         mosaic_image_path: &Path,
         output_path: &Path,
@@ -203,37 +203,38 @@ where
 
         let mut html = String::new();
 
-        // HTML document structure
-        html.push_str(&format!(r#"<!DOCTYPE html>
+        // Minimal HTML document structure for widget
+        html.push_str(&format!(
+            r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mosaic Visualization - {}</title>
+    <title>Mosaic Widget</title>
     <style>
         body {{
-            font-family: Arial, sans-serif;
             margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }}
-        .container {{
-            max-width: 100%;
-            margin: 0 auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 0;
+            font-family: Arial, sans-serif;
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
         }}
         .mosaic-container {{
             position: relative;
-            display: inline-block;
-            margin: 20px 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
         }}
         .mosaic-image {{
             display: block;
             max-width: 100%;
+            max-height: 100%;
+            width: auto;
             height: auto;
+            object-fit: contain;
         }}
         .tile-region {{
             position: absolute;
@@ -277,59 +278,11 @@ where
         .tile-region:hover .tooltip {{
             opacity: 1;
         }}
-        .stats {{
-            margin-top: 30px;
-            padding: 20px;
-            background: #f8f9fa;
-            border-radius: 4px;
-        }}
-        .stats h2 {{
-            margin-top: 0;
-            color: #333;
-        }}
-        .stats-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-            margin-top: 20px;
-        }}
-        .stats-section {{
-            background: white;
-            padding: 15px;
-            border-radius: 4px;
-            border: 1px solid #ddd;
-        }}
-        .stats-section h3 {{
-            margin-top: 0;
-            color: #555;
-        }}
-        .tile-info {{
-            display: flex;
-            justify-content: space-between;
-            padding: 5px 0;
-            border-bottom: 1px solid #eee;
-        }}
-        .tile-info:last-child {{
-            border-bottom: none;
-        }}
         .distance-good {{ color: #28a745; }}
         .distance-medium {{ color: #ffc107; }}
         .distance-bad {{ color: #dc3545; }}
 
         /* Distance overlay styles */
-        .distance-toggle {{
-            margin: 10px 0;
-            padding: 8px 16px;
-            background: #007bff;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }}
-        .distance-toggle:hover {{
-            background: #0056b3;
-        }}
         .distance-overlay {{
             position: absolute;
             top: 0;
@@ -356,51 +309,20 @@ where
         .overlay-distance-medium {{ background: rgba(255, 193, 7, 0.8); }}
         .overlay-distance-poor {{ background: rgba(255, 152, 0, 0.8); }}
         .overlay-distance-bad {{ background: rgba(220, 53, 69, 0.8); }}
-
-        .distance-legend {{
-            margin: 10px 0;
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 4px;
-            font-size: 12px;
-            display: none;
-        }}
-        .distance-legend.visible {{
-            display: block;
-        }}
-        .legend-item {{
-            display: inline-block;
-            margin: 5px 10px 5px 0;
-        }}
-        .legend-color {{
-            display: inline-block;
-            width: 20px;
-            height: 15px;
-            margin-right: 5px;
-            vertical-align: middle;
-            border: 1px solid #ccc;
-        }}
     </style>
     <script>
         function toggleDistanceOverlay() {{
             const overlay = document.getElementById('distance-overlay');
-            const legend = document.getElementById('distance-legend');
-            const button = document.getElementById('distance-toggle-btn');
-
-
-            if (!overlay || !legend || !button) {{
-                console.error('Missing elements:', {{overlay, legend, button}});
-                return;
+            if (overlay) {{
+                overlay.classList.toggle('visible');
             }}
-
-            if (overlay.classList.contains('visible')) {{
-                overlay.classList.remove('visible');
-                legend.classList.remove('visible');
-                button.textContent = 'Show Distance Overlay';
-            }} else {{
-                overlay.classList.add('visible');
-                legend.classList.add('visible');
-                button.textContent = 'Hide Distance Overlay';
+            // Notify parent window of state change
+            if (window.parent !== window) {{
+                const isVisible = overlay && overlay.classList.contains('visible');
+                window.parent.postMessage({{
+                    type: 'distanceOverlayToggled',
+                    visible: isVisible
+                }}, '*');
             }}
         }}
 
@@ -408,10 +330,8 @@ where
             // Convert file path to file:// URL for local files
             let absolutePath;
             if (imagePath.startsWith('/') || imagePath.match(/^[A-Za-z]:/)) {{
-                // Already absolute path
                 absolutePath = imagePath;
             }} else {{
-                // Relative path, prepend cwd
                 absolutePath = cwd + '/' + imagePath;
             }}
             const fileUrl = 'file://' + absolutePath;
@@ -419,43 +339,73 @@ where
             window.open(fileUrl, '_blank');
         }}
 
-        // Also try to ensure functions are accessible globally
+        // Listen for messages from parent window
+        window.addEventListener('message', function(event) {{
+            if (event.data.type === 'toggleDistanceOverlay') {{
+                toggleDistanceOverlay();
+            }}
+        }});
+
+        // Adjust positioning when image loads or window resizes
+        function adjustMosaicLayout() {{
+            const image = document.querySelector('.mosaic-image');
+            const container = document.querySelector('.mosaic-container');
+            const overlay = document.querySelector('.distance-overlay');
+            const tileRegions = document.querySelectorAll('.tile-region');
+            const overlayTiles = document.querySelectorAll('.distance-overlay-tile');
+
+            if (!image || !container) return;
+
+            // Get actual image dimensions and position
+            const imageRect = image.getBoundingClientRect();
+            const containerRect = container.getBoundingClientRect();
+
+            // Calculate offset from container to image
+            const offsetX = imageRect.left - containerRect.left;
+            const offsetY = imageRect.top - containerRect.top;
+
+            // Update overlay dimensions and position
+            if (overlay) {{
+                overlay.style.left = offsetX + 'px';
+                overlay.style.top = offsetY + 'px';
+                overlay.style.width = imageRect.width + 'px';
+                overlay.style.height = imageRect.height + 'px';
+            }}
+
+            // Update tile regions and overlay tiles positioning
+            [...tileRegions, ...overlayTiles].forEach(element => {{
+                const currentLeft = parseFloat(element.style.left) || 0;
+                const currentTop = parseFloat(element.style.top) || 0;
+                const currentWidth = parseFloat(element.style.width) || 0;
+                const currentHeight = parseFloat(element.style.height) || 0;
+
+                // Convert percentages to actual pixels relative to image
+                element.style.left = offsetX + (currentLeft / 100) * imageRect.width + 'px';
+                element.style.top = offsetY + (currentTop / 100) * imageRect.height + 'px';
+                element.style.width = (currentWidth / 100) * imageRect.width + 'px';
+                element.style.height = (currentHeight / 100) * imageRect.height + 'px';
+            }});
+        }}
+
+        // Adjust layout when image loads and on window resize
+        window.addEventListener('load', adjustMosaicLayout);
+        window.addEventListener('resize', adjustMosaicLayout);
+
+        // Make functions globally accessible
         window.toggleDistanceOverlay = toggleDistanceOverlay;
         window.openTileImage = openTileImage;
+        window.adjustMosaicLayout = adjustMosaicLayout;
     </script>
 </head>
 <body>
-    <div class="container">
-        <h1>Mosaic Visualization</h1>
-        <p>Hover over any tile to see detailed information including distance score and source file. <strong>Click on any tile to open the original image in a new tab.</strong></p>
-
-        <button id="distance-toggle-btn" class="distance-toggle" onclick="toggleDistanceOverlay()">Show Distance Overlay</button>
-
-        <div id="distance-legend" class="distance-legend">
-            <strong>Distance Legend:</strong>
-            <div class="legend-item">
-                <span class="legend-color overlay-distance-excellent"></span>Excellent (0-20%)
-            </div>
-            <div class="legend-item">
-                <span class="legend-color overlay-distance-good"></span>Good (20-40%)
-            </div>
-            <div class="legend-item">
-                <span class="legend-color overlay-distance-medium"></span>Medium (40-60%)
-            </div>
-            <div class="legend-item">
-                <span class="legend-color overlay-distance-poor"></span>Poor (60-80%)
-            </div>
-            <div class="legend-item">
-                <span class="legend-color overlay-distance-bad"></span>Bad (80-100%)
-            </div>
-        </div>
-
-        <div class="mosaic-container">
-            <img src="{}" alt="Mosaic Image" class="mosaic-image" />
-            <div id="distance-overlay" class="distance-overlay">
+    <div class="mosaic-container">
+        <img src="{}" alt="Mosaic Image" class="mosaic-image" />
+        <div id="distance-overlay" class="distance-overlay">
 "#,
-            mosaic_image_path.file_name().unwrap_or_default().to_string_lossy(),
-            mosaic_image_path.file_name().unwrap_or_default().to_string_lossy()
+            mosaic_image_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
         ));
 
         // Calculate image dimensions and tile positions
@@ -500,13 +450,13 @@ where
 
             // Add distance overlay tile
             html.push_str(&format!(r#"
-                <div class="distance-overlay-tile {}" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;"></div>"#,
+            <div class="distance-overlay-tile {}" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;"></div>"#,
                 overlay_class, left_percent, top_percent, width_percent, height_percent
             ));
         }
 
         // Close distance overlay container
-        html.push_str("            </div>\n");
+        html.push_str("        </div>\n");
 
         // Generate interactive tile regions with tooltips
         for ((x, y), tile) in &self.tiles {
@@ -557,7 +507,7 @@ where
             } else {
                 cwd.join(tile_path)
             };
-            
+
             // Convert to file URL for browser (need to URL encode for safety)
             let file_url = format!("file://{}", absolute_tile_path.display());
 
@@ -569,25 +519,270 @@ where
             };
 
             html.push_str(&format!(r#"
-            <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" onclick="openTileImage('{}', '{}')">
-                <div class="tooltip">
-                    <img src="{}" alt="Tile Preview" class="tooltip-image" onerror="this.style.display='none'"/><br/>
-                    <strong>Tile Information</strong><br/>
-                    Position: ({}, {})<br/>
-                    <span class="{}">Distance: {:.3}</span><br/>
-                    Flipped: {}<br/>
-                    {}Path: {} <em>(click to open)</em>
-                </div>
-            </div>"#,
+        <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" onclick="openTileImage('{}', '{}')">
+            <div class="tooltip">
+                <img src="{}" alt="Tile Preview" class="tooltip-image" onerror="this.style.display='none'"/><br/>
+                <strong>Tile Information</strong><br/>
+                Position: ({}, {})<br/>
+                <span class="{}">Distance: {:.3}</span><br/>
+                Flipped: {}<br/>
+                {}
+            </div>
+        </div>"#,
                 left_percent, top_percent, width_percent, height_percent, escaped_path, escaped_cwd,
                 file_url,
                 x, y, distance_class, distance, tile.flipped,
-                date_info,
-                tile_path.display()
+                date_info
             ));
         }
 
-        html.push_str("        </div>\n");
+        html.push_str("    </div>\n");
+
+        // Close HTML document
+        html.push_str(
+            r#"
+</body>
+</html>"#,
+        );
+
+        // Write HTML file
+        let mut file = std::fs::File::create(output_path)?;
+        file.write_all(html.as_bytes())?;
+
+        Ok(())
+    }
+
+    /// Generate an HTML file with the mosaic image and interactive tooltips.
+    ///
+    /// Creates an HTML document embedding the mosaic image with CSS-based tooltips
+    /// that appear on hover, showing tile distance scores and original file paths.
+    ///
+    /// # Arguments
+    /// * `mosaic_image_path` - Path to the generated mosaic JPEG image
+    /// * `output_path` - Path where the HTML file should be written
+    /// * `tile_set` - The tile set used for generating the mosaic
+    /// * `config` - Configuration settings used to generate the mosaic
+    ///
+    /// # Returns
+    /// * `Ok(())` - If HTML file was successfully generated
+    /// * `Err(std::io::Error)` - If file writing failed
+    pub fn generate_html<T>(
+        &self,
+        mosaic_image_path: &Path,
+        output_path: &Path,
+        tile_set: &TileSet<T>,
+        config: &MosaicConfig,
+    ) -> Result<(), std::io::Error> {
+        if self.tiles.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No tiles recorded in statistics",
+            ));
+        }
+
+        // First, generate the standalone mosaic widget
+        let widget_path = output_path.with_file_name(format!(
+            "{}_widget.html",
+            output_path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+        ));
+
+        self.generate_mosaic_widget(mosaic_image_path, &widget_path, tile_set, config)?;
+
+        let mut html = String::new();
+
+        // HTML document structure for the main page
+        html.push_str(&format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mosaic Visualization - {}</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }}
+        .container {{
+            max-width: 100%;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        .mosaic-frame {{
+            margin: 20px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            overflow: hidden;
+            background: white;
+        }}
+        .mosaic-iframe {{
+            width: 100%;
+            height: 80vh;
+            border: none;
+            display: block;
+        }}
+        .stats {{
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }}
+        .stats h2 {{
+            margin-top: 0;
+            color: #333;
+        }}
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }}
+        .stats-section {{
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }}
+        .stats-section h3 {{
+            margin-top: 0;
+            color: #555;
+        }}
+        .tile-info {{
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }}
+        .tile-info:last-child {{
+            border-bottom: none;
+        }}
+        .distance-good {{ color: #28a745; }}
+        .distance-medium {{ color: #ffc107; }}
+        .distance-bad {{ color: #dc3545; }}
+
+        /* Distance overlay controls */
+        .distance-toggle {{
+            margin: 10px 0;
+            padding: 8px 16px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }}
+        .distance-toggle:hover {{
+            background: #0056b3;
+        }}
+        .distance-legend {{
+            margin: 10px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            font-size: 12px;
+            display: none;
+        }}
+        .distance-legend.visible {{
+            display: block;
+        }}
+        .legend-item {{
+            display: inline-block;
+            margin: 5px 10px 5px 0;
+        }}
+        .legend-color {{
+            display: inline-block;
+            width: 20px;
+            height: 15px;
+            margin-right: 5px;
+            vertical-align: middle;
+            border: 1px solid #ccc;
+        }}
+        /* Distance color coding for overlay */
+        .overlay-distance-excellent {{ background: rgba(0, 255, 0, 0.8); }}
+        .overlay-distance-good {{ background: rgba(40, 167, 69, 0.8); }}
+        .overlay-distance-medium {{ background: rgba(255, 193, 7, 0.8); }}
+        .overlay-distance-poor {{ background: rgba(255, 152, 0, 0.8); }}
+        .overlay-distance-bad {{ background: rgba(220, 53, 69, 0.8); }}
+    </style>
+    <script>
+        function toggleDistanceOverlay() {{
+            const iframe = document.getElementById('mosaic-iframe');
+            const legend = document.getElementById('distance-legend');
+            const button = document.getElementById('distance-toggle-btn');
+
+            if (!iframe || !legend || !button) {{
+                console.error('Missing elements:', {{iframe, legend, button}});
+                return;
+            }}
+
+            // Send message to iframe to toggle overlay
+            iframe.contentWindow.postMessage({{
+                type: 'toggleDistanceOverlay'
+            }}, '*');
+        }}
+
+        // Listen for messages from the iframe
+        window.addEventListener('message', function(event) {{
+            if (event.data.type === 'distanceOverlayToggled') {{
+                const legend = document.getElementById('distance-legend');
+                const button = document.getElementById('distance-toggle-btn');
+
+                if (legend && button) {{
+                    if (event.data.visible) {{
+                        legend.classList.add('visible');
+                        button.textContent = 'Hide Distance Overlay';
+                    }} else {{
+                        legend.classList.remove('visible');
+                        button.textContent = 'Show Distance Overlay';
+                    }}
+                }}
+            }}
+        }});
+
+        // Make function globally accessible
+        window.toggleDistanceOverlay = toggleDistanceOverlay;
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h1>Mosaic Visualization</h1>
+        <p>Hover over any tile to see detailed information including distance score and source file. <strong>Click on any tile to open the original image in a new tab.</strong></p>
+
+        <button id="distance-toggle-btn" class="distance-toggle" onclick="toggleDistanceOverlay()">Show Distance Overlay</button>
+
+        <div id="distance-legend" class="distance-legend">
+            <strong>Distance Legend:</strong>
+            <div class="legend-item">
+                <span class="legend-color overlay-distance-excellent"></span>Excellent (0-20%)
+            </div>
+            <div class="legend-item">
+                <span class="legend-color overlay-distance-good"></span>Good (20-40%)
+            </div>
+            <div class="legend-item">
+                <span class="legend-color overlay-distance-medium"></span>Medium (40-60%)
+            </div>
+            <div class="legend-item">
+                <span class="legend-color overlay-distance-poor"></span>Poor (60-80%)
+            </div>
+            <div class="legend-item">
+                <span class="legend-color overlay-distance-bad"></span>Bad (80-100%)
+            </div>
+        </div>
+
+        <div class="mosaic-frame">
+            <iframe id="mosaic-iframe" class="mosaic-iframe" src="{}" title="Interactive Mosaic Visualization"></iframe>
+        </div>
+"#,
+            mosaic_image_path.file_name().unwrap_or_default().to_string_lossy(),
+            widget_path.file_name().unwrap_or_default().to_string_lossy()
+        ));
 
         // Generate statistics section
         self.append_stats_html(&mut html, tile_set);
@@ -827,5 +1022,36 @@ mod tests {
         // Pixel 1 should be darker (lower distance = 50)
         // Pixel 2 should be lighter (higher distance = 150)
         assert!(pixel1[0] < pixel2[0]);
+    }
+
+    #[test]
+    fn test_generate_mosaic_widget() {
+        let mut stats: RenderStats<u32> = RenderStats::new();
+        let mut tile_set: TileSet<[Rgb<u8>; 1]> = TileSet::new();
+
+        let colors = [Rgb([255, 0, 0])];
+        tile_set.push_tile(PathBuf::from("test.jpg"), colors);
+
+        let tile = tile_set.tiles[0].clone();
+        stats.push_tile(0, 0, &tile, 100);
+
+        let config = MosaicConfig {
+            tile_size: 16,
+            mode: "test".to_string(),
+            no_repeat: false,
+            greedy: false,
+            crop: false,
+            tint_opacity: 0.0,
+            downsample: 1,
+            randomize: None,
+            tiles_dir: "test_tiles".to_string(),
+        };
+
+        let mosaic_path = PathBuf::from("test_mosaic.jpg");
+        let output_path = PathBuf::from("/tmp/test_widget.html");
+
+        // Should not panic and should create valid HTML
+        let result = stats.generate_mosaic_widget(&mosaic_path, &output_path, &tile_set, &config);
+        assert!(result.is_ok(), "Widget generation should succeed");
     }
 }
