@@ -417,7 +417,7 @@ where
                 element.style.width = (original.width / 100) * imageRect.width + 'px';
                 element.style.height = (original.height / 100) * imageRect.height + 'px';
             }});
-            
+
             // Distance overlay tiles should keep their percentage positioning relative to the overlay container
             // Since the overlay container is already positioned and sized to match the image,
             // the tiles inside should maintain their original percentage positions
@@ -558,17 +558,13 @@ where
         <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" onclick="openTileImage('{}', '{}')">
             <div class="tooltip">
                 <img src="{}" alt="Tile Preview" class="tooltip-image" onerror="this.style.display='none'"/><br/>
-                <strong>Tile Information</strong><br/>
-                Position: ({}, {})<br/>
                 <span class="{}">Distance: {:.3}</span><br/>
-                Flipped: {}<br/>
                 {}
             </div>
         </div>"#,
                 left_percent, top_percent, width_percent, height_percent, escaped_path, escaped_cwd,
                 file_url,
-                x, y, distance_class, distance, tile.flipped,
-                date_info
+                distance_class, distance, date_info
             ));
         }
 
