@@ -21,6 +21,7 @@ use image::{imageops, DynamicImage, ImageFormat, Rgb, Rgba, RgbaImage};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
+use mosaic::stats::MosaicConfig;
 use mosaic::tiles::{prepare_tile, prepare_tile_with_date, Tile, TileSet};
 use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -390,17 +391,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_rgb8();
 
             let img_and_stats = match mode {
-                Mode::_1 => n_to_1::<1>(args, &img, tile_size, crop),
-                Mode::_2 => n_to_1::<4>(args, &img, tile_size, crop),
-                Mode::_3 => n_to_1::<9>(args, &img, tile_size, crop),
-                Mode::_4 => n_to_1::<16>(args, &img, tile_size, crop),
-                Mode::_5 => n_to_1::<25>(args, &img, tile_size, crop),
-                Mode::_6 => n_to_1::<36>(args, &img, tile_size, crop),
-                Mode::_8 => n_to_1::<64>(args, &img, tile_size, crop),
-                Mode::_16 => n_to_1::<256>(args, &img, tile_size, crop),
-                Mode::_32 => n_to_1::<1024>(args, &img, tile_size, crop),
-                Mode::_64 => n_to_1::<4096>(args, &img, tile_size, crop),
-                Mode::_128 => n_to_1::<16384>(args, &img, tile_size, crop),
+                Mode::_1 => n_to_1::<1>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_2 => n_to_1::<4>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_3 => n_to_1::<9>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_4 => n_to_1::<16>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_5 => n_to_1::<25>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_6 => n_to_1::<36>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_8 => n_to_1::<64>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_16 => n_to_1::<256>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_32 => n_to_1::<1024>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_64 => n_to_1::<4096>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_128 => {
+                    n_to_1::<16384>(args, &img, tile_size, crop, mode, tint_opacity as f32)
+                }
                 Mode::Random => {
                     let images = find_images(&args.tiles_dir, |ext| {
                         args.extensions.contains(&ext.to_string_lossy().to_string())
@@ -530,7 +533,17 @@ struct ImgAndStats {
 }
 
 fn n_to_1<const N: usize>(
-    Mosaic {
+    mosaic_args: Mosaic,
+    original_img: &image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
+    tile_size: u32,
+    crop: bool,
+    mode: Mode,
+    tint_opacity: f32,
+) -> Result<ImgAndStats, ImageError>
+where
+    [(); N * 3]:,
+{
+    let Mosaic {
         extensions,
         force,
         no_repeat,
@@ -540,14 +553,8 @@ fn n_to_1<const N: usize>(
         greedy,
         html,
         ..
-    }: Mosaic,
-    original_img: &image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
-    tile_size: u32,
-    crop: bool,
-) -> Result<ImgAndStats, ImageError>
-where
-    [(); N * 3]:,
-{
+    } = mosaic_args;
+
     let dim = (N as f64).sqrt() as u32;
 
     // resize the original img by the downsampling factor
@@ -653,14 +660,48 @@ where
 
     let html_generator = if html {
         eprintln!("📄 HTML output requested - will generate after image save");
-        
+
+        // Create MosaicConfig for HTML generation
+        let mode_str = match mode {
+            Mode::_1 => "1x1 (N=1)",
+            Mode::_2 => "2x2 (N=4)",
+            Mode::_3 => "3x3 (N=9)",
+            Mode::_4 => "4x4 (N=16)",
+            Mode::_5 => "5x5 (N=25)",
+            Mode::_6 => "6x6 (N=36)",
+            Mode::_8 => "8x8 (N=64)",
+            Mode::_16 => "16x16 (N=256)",
+            Mode::_32 => "32x32 (N=1024)",
+            Mode::_64 => "64x64 (N=4096)",
+            Mode::_128 => "128x128 (N=16384)",
+            Mode::Random => "Random",
+        };
+
+        let config = MosaicConfig {
+            tile_size,
+            mode: mode_str.to_string(),
+            no_repeat,
+            greedy,
+            crop,
+            tint_opacity,
+            downsample: downsample.into(),
+            randomize,
+            tiles_dir: tiles_dir.display().to_string(),
+        };
+
         // Clone the necessary data for the closure
         let stats_clone = stats.clone();
         let tile_set_clone = tile_set.clone();
-        let ts = tile_size;
-        Some(Box::new(move |mosaic_path: &std::path::Path, html_path: &std::path::Path| -> Result<(), std::io::Error> {
-            stats_clone.generate_html(mosaic_path, html_path, &tile_set_clone, ts)
-        }) as Box<dyn FnOnce(&std::path::Path, &std::path::Path) -> Result<(), std::io::Error> + Send>)
+        Some(Box::new(
+            move |mosaic_path: &std::path::Path,
+                  html_path: &std::path::Path|
+                  -> Result<(), std::io::Error> {
+                stats_clone.generate_html(mosaic_path, html_path, &tile_set_clone, &config)
+            },
+        )
+            as Box<
+                dyn FnOnce(&std::path::Path, &std::path::Path) -> Result<(), std::io::Error> + Send,
+            >)
     } else {
         None
     };

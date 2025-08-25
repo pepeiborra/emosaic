@@ -6,6 +6,20 @@ use image::{ImageBuffer, Rgb, RgbImage};
 
 use super::tiles::{Tile, TileSet};
 
+/// Configuration settings used to generate the mosaic
+#[derive(Debug, Clone)]
+pub struct MosaicConfig {
+    pub tile_size: u32,
+    pub mode: String,
+    pub no_repeat: bool,
+    pub greedy: bool,
+    pub crop: bool,
+    pub tint_opacity: f32,
+    pub downsample: u32,
+    pub randomize: Option<f64>,
+    pub tiles_dir: String,
+}
+
 /// Statistics collector for mosaic rendering operations.
 ///
 /// Tracks tile placement positions, distances, and usage patterns
@@ -182,7 +196,7 @@ where
     /// * `mosaic_image_path` - Path to the generated mosaic JPEG image
     /// * `output_path` - Path where the widget HTML file should be written
     /// * `tile_set` - The tile set used for generating the mosaic
-    /// * `tile_size` - Size of each tile in pixels for coordinate conversion
+    /// * `config` - Configuration settings used to generate the mosaic
     ///
     /// # Returns
     /// * `Ok(())` - If widget HTML file was successfully generated
@@ -192,7 +206,7 @@ where
         mosaic_image_path: &Path,
         output_path: &Path,
         tile_set: &TileSet<T>,
-        tile_size: u32,
+        config: &MosaicConfig,
     ) -> Result<(), std::io::Error> {
         if self.tiles.is_empty() {
             return Err(std::io::Error::new(
@@ -433,8 +447,8 @@ where
         // Calculate image dimensions and tile positions
         let max_x = self.tiles.keys().map(|(x, _)| *x).max().unwrap_or(0);
         let max_y = self.tiles.keys().map(|(_, y)| *y).max().unwrap_or(0);
-        let image_width = max_x + tile_size;
-        let image_height = max_y + tile_size;
+        let image_width = max_x + config.tile_size;
+        let image_height = max_y + config.tile_size;
 
         // Find distance range for color coding
         let distances: Vec<f64> = self.tiles.values().map(|t| t.colors.into()).collect();
@@ -449,8 +463,8 @@ where
             // Calculate relative position as percentage of image size
             let left_percent = (*x as f64 / image_width as f64) * 100.0;
             let top_percent = (*y as f64 / image_height as f64) * 100.0;
-            let width_percent = (tile_size as f64 / image_width as f64) * 100.0;
-            let height_percent = (tile_size as f64 / image_height as f64) * 100.0;
+            let width_percent = (config.tile_size as f64 / image_width as f64) * 100.0;
+            let height_percent = (config.tile_size as f64 / image_height as f64) * 100.0;
 
             // Determine overlay color class
             let overlay_class = if distance_range > 0.0 {
@@ -488,8 +502,8 @@ where
             // Calculate relative position as percentage of image size
             let left_percent = (*x as f64 / image_width as f64) * 100.0;
             let top_percent = (*y as f64 / image_height as f64) * 100.0;
-            let width_percent = (tile_size as f64 / image_width as f64) * 100.0;
-            let height_percent = (tile_size as f64 / image_height as f64) * 100.0;
+            let width_percent = (config.tile_size as f64 / image_width as f64) * 100.0;
+            let height_percent = (config.tile_size as f64 / image_height as f64) * 100.0;
 
             // Determine distance color class for tooltip text
             let distance_class = if distance_range > 0.0 {
@@ -807,7 +821,7 @@ where
         ));
 
         // Generate statistics section
-        self.append_stats_html(&mut html, tile_set);
+        self.append_stats_html(&mut html, tile_set, config);
 
         // Close HTML document
         html.push_str(
@@ -825,7 +839,12 @@ where
     }
 
     /// Helper function to append statistics section to HTML
-    fn append_stats_html<T>(&self, html: &mut String, tile_set: &TileSet<T>) {
+    fn append_stats_html<T>(
+        &self,
+        html: &mut String,
+        tile_set: &TileSet<T>,
+        config: &MosaicConfig,
+    ) {
         // Calculate basic statistics
         let mut total_distance: D = 0_u8.into();
         let mut tile_usage_count: HashMap<&Path, u16> = HashMap::new();
@@ -861,10 +880,60 @@ where
                         <span>{:.3}</span>
                     </div>
                 </div>
+                <div class="stats-section">
+                    <h3>Configuration</h3>
+                    <div class="tile-info">
+                        <span>Mode:</span>
+                        <span>{}</span>
+                    </div>
+                    <div class="tile-info">
+                        <span>Tile size:</span>
+                        <span>{} px</span>
+                    </div>
+                    <div class="tile-info">
+                        <span>No repeat:</span>
+                        <span>{}</span>
+                    </div>
+                    <div class="tile-info">
+                        <span>Greedy algorithm:</span>
+                        <span>{}</span>
+                    </div>
+                    <div class="tile-info">
+                        <span>Crop tiles:</span>
+                        <span>{}</span>
+                    </div>
+                    <div class="tile-info">
+                        <span>Tint opacity:</span>
+                        <span>{:.1}%</span>
+                    </div>
+                    <div class="tile-info">
+                        <span>Downsample factor:</span>
+                        <span>{}x</span>
+                    </div>
+                    <div class="tile-info">
+                        <span>Randomization:</span>
+                        <span>{}</span>
+                    </div>
+                    <div class="tile-info">
+                        <span>Tiles directory:</span>
+                        <span>{}</span>
+                    </div>
+                </div>
 "#,
             self.tiles.len(),
             unique_tiles,
-            avg_distance
+            avg_distance,
+            config.mode,
+            config.tile_size,
+            if config.no_repeat { "Yes" } else { "No" },
+            if config.greedy { "Yes" } else { "No" },
+            if config.crop { "Yes" } else { "No" },
+            config.tint_opacity * 100.0,
+            config.downsample,
+            config
+                .randomize
+                .map_or("None".to_string(), |r| format!("{:.1}%", r)),
+            config.tiles_dir
         ));
 
         // Most used tiles
