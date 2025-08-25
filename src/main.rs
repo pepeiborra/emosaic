@@ -253,7 +253,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(SubCommand::Mosaic(args)) => {
             // Validate tiles directory
             validate_tiles_directory(&args.tiles_dir)?;
-            
+
             let mode = args.mode;
             let tint_opacity = args.tint_opacity;
             let img_path = &img;
@@ -308,14 +308,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let output = img_and_stats.img;
             if tint_opacity > 0.0 {
-                let mut overlay = RgbaImage::new(img.width(), img.height());
-                for x in 0..img.width() {
-                    for y in 0..img.height() {
-                        let p = img.get_pixel(x, y);
-                        let p2: Rgba<u8> = Rgba([p[0], p[1], p[2], (255_f64 * tint_opacity) as u8]);
-                        overlay.put_pixel(x, y, p2);
-                    }
-                }
+                // Create overlay more efficiently using from_fn
+                let alpha_value = (255.0 * tint_opacity) as u8;
+                let overlay = RgbaImage::from_fn(img.width(), img.height(), |x, y| {
+                    let p = img.get_pixel(x, y);
+                    Rgba([p[0], p[1], p[2], alpha_value])
+                });
+
                 // Scale up to match the output size
                 let overlay = imageops::resize(
                     &overlay,
@@ -323,12 +322,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     output.height(),
                     FilterType::Nearest,
                 );
+
                 // Apply overlay
                 let mut output2 = DynamicImage::ImageRgb8(output).to_rgba8();
                 imageops::overlay(&mut output2, &overlay, 0, 0);
-                let format = ImageFormat::Png;
+
                 output2
-                    .save_with_format(&output_path, format)
+                    .save_with_format(&output_path, ImageFormat::Png)
                     .map_err(|e| {
                         format!(
                             "Failed to save output image to {}: {}",
