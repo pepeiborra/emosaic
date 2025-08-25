@@ -9,9 +9,9 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::create_dir_all;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
-use std::time::Instant;
-use std::{fs, io};
+use std::sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, RwLock};
+use std::time::{Duration, Instant};
+use std::{fs, io, thread};
 
 use clap::{self, Args, Parser, Subcommand, ValueEnum};
 use image::{imageops, DynamicImage, ImageFormat, Rgb, Rgba, RgbaImage};
@@ -143,7 +143,103 @@ fn is_percentage(s: &str) -> Result<f64, String> {
     Err(String::from("Value must be between 0 and 100"))
 }
 
-fn print_runtime_stats(start_time: Instant) {
+/// Memory monitor that tracks peak RSS usage in a background thread
+struct MemoryMonitor {
+    peak_rss_kb: Arc<AtomicU64>,
+    shutdown: Arc<AtomicBool>,
+    _handle: thread::JoinHandle<()>,
+}
+
+impl MemoryMonitor {
+    /// Start monitoring memory usage in a background thread
+    fn start() -> Self {
+        let peak_rss_kb = Arc::new(AtomicU64::new(0));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        
+        let peak_rss_kb_clone = Arc::clone(&peak_rss_kb);
+        let shutdown_clone = Arc::clone(&shutdown);
+        
+        let handle = thread::spawn(move || {
+            while !shutdown_clone.load(Ordering::Relaxed) {
+                if let Some(current_rss_kb) = get_current_rss_kb() {
+                    // Update peak if current is higher
+                    let mut current_peak = peak_rss_kb_clone.load(Ordering::Relaxed);
+                    while current_rss_kb > current_peak {
+                        match peak_rss_kb_clone.compare_exchange_weak(
+                            current_peak, 
+                            current_rss_kb, 
+                            Ordering::Relaxed, 
+                            Ordering::Relaxed
+                        ) {
+                            Ok(_) => break,
+                            Err(updated_peak) => current_peak = updated_peak,
+                        }
+                    }
+                }
+                thread::sleep(Duration::from_millis(100)); // Check every 100ms
+            }
+        });
+        
+        Self {
+            peak_rss_kb,
+            shutdown,
+            _handle: handle,
+        }
+    }
+    
+    /// Get the peak memory usage in MB
+    fn get_peak_mb(&self) -> String {
+        let peak_kb = self.peak_rss_kb.load(Ordering::Relaxed);
+        if peak_kb > 0 {
+            format!("{:.1}", peak_kb as f64 / 1024.0)
+        } else {
+            "N/A".to_string()
+        }
+    }
+}
+
+impl Drop for MemoryMonitor {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Get current RSS (Resident Set Size) in KB for the current process
+fn get_current_rss_kb() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let output = Command::new("ps")
+            .args(["-o", "rss=", "-p"])
+            .arg(std::process::id().to_string())
+            .output()
+            .ok()?;
+            
+        let rss_str = String::from_utf8(output.stdout).ok()?;
+        rss_str.trim().parse::<u64>().ok()
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        for line in status.lines() {
+            if line.starts_with("VmRSS:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    return parts[1].parse::<u64>().ok();
+                }
+            }
+        }
+        None
+    }
+    
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
+}
+
+fn print_runtime_stats(start_time: Instant, memory_monitor: &MemoryMonitor) {
     let duration = start_time.elapsed();
     let total_secs = duration.as_secs_f64();
 
@@ -157,29 +253,8 @@ fn print_runtime_stats(start_time: Instant) {
     }
 
     if total_secs >= 1.0 {
-        eprintln!("   Peak memory usage: {} MB", get_peak_memory_usage_mb());
+        eprintln!("   Peak memory usage: {} MB", memory_monitor.get_peak_mb());
     }
-}
-
-fn get_peak_memory_usage_mb() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        let output = Command::new("ps")
-            .args(["-o", "rss=", "-p"])
-            .arg(std::process::id().to_string())
-            .output();
-
-        if let Ok(output) = output {
-            if let Ok(rss_str) = String::from_utf8(output.stdout) {
-                if let Ok(rss_kb) = rss_str.trim().parse::<u64>() {
-                    return format!("{:.1}", rss_kb as f64 / 1024.0);
-                }
-            }
-        }
-    }
-
-    "N/A".to_string()
 }
 
 /// Validates that the tile size is reasonable and divisible by required dimensions
@@ -261,6 +336,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { backtrace_on_stack_overflow::enable() };
 
     let start_time = Instant::now();
+    let memory_monitor = MemoryMonitor::start();
 
     let cli = Cli::parse();
 
@@ -295,7 +371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("Failed to prepare tile from {}: {}", img.display(), e))?;
             tile.save(&output_path)
                 .map_err(|e| format!("Failed to save tile to {}: {}", output_path.display(), e))?;
-            print_runtime_stats(start_time);
+            print_runtime_stats(start_time, &memory_monitor);
         }
         Some(SubCommand::Mosaic(args)) => {
             // Validate tiles directory
@@ -384,7 +460,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             e
                         )
                     })?;
-                print_runtime_stats(start_time);
+                print_runtime_stats(start_time, &memory_monitor);
                 return Ok(());
             }
 
@@ -433,11 +509,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "🎉 All done! Your mosaic is ready at {}",
                 output_path.display()
             );
-            print_runtime_stats(start_time);
+            print_runtime_stats(start_time, &memory_monitor);
         }
     }
 
-    print_runtime_stats(start_time);
+    print_runtime_stats(start_time, &memory_monitor);
     Ok(())
 }
 
