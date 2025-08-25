@@ -323,8 +323,102 @@ where
         .overlay-distance-medium {{ background: rgba(255, 193, 7, 0.8); }}
         .overlay-distance-poor {{ background: rgba(255, 152, 0, 0.8); }}
         .overlay-distance-bad {{ background: rgba(220, 53, 69, 0.8); }}
+
+        /* Mobile modal styles */
+        .mobile-modal {{
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 2000;
+            animation: fadeIn 0.3s ease;
+        }}
+
+        .mobile-modal.active {{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+
+        .modal-content {{
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            max-width: 90vw;
+            max-height: 90vh;
+            overflow-y: auto;
+            position: relative;
+            animation: slideUp 0.3s ease;
+        }}
+
+        .modal-close {{
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            font-size: 24px;
+            cursor: pointer;
+            color: #666;
+            background: none;
+            border: none;
+            padding: 0;
+            line-height: 1;
+        }}
+
+        .modal-image {{
+            display: block;
+            max-width: 100%;
+            max-height: 50vh;
+            width: auto;
+            height: auto;
+            margin: 0 auto 15px;
+            border-radius: 4px;
+            object-fit: contain;
+        }}
+
+        .modal-info {{
+            text-align: left;
+            font-size: 14px;
+            line-height: 1.5;
+        }}
+
+        .modal-info strong {{
+            color: #333;
+        }}
+
+        @keyframes fadeIn {{
+            from {{ opacity: 0; }}
+            to {{ opacity: 1; }}
+        }}
+
+        @keyframes slideUp {{
+            from {{ 
+                opacity: 0;
+                transform: translateY(20px);
+            }}
+            to {{ 
+                opacity: 1;
+                transform: translateY(0);
+            }}
+        }}
+
+        /* Hide tooltips on mobile */
+        @media (max-width: 768px), (hover: none) {{
+            .tooltip {{
+                display: none !important;
+            }}
+        }}
     </style>
     <script>
+        // Mobile detection
+        function isMobile() {{
+            return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                   ('ontouchstart' in window) ||
+                   (navigator.maxTouchPoints > 0);
+        }}
+
         function toggleDistanceOverlay() {{
             const overlay = document.getElementById('distance-overlay');
             if (overlay) {{
@@ -434,7 +528,10 @@ where
         }}
 
         // Adjust layout when image loads and on window resize
-        window.addEventListener('load', adjustMosaicLayout);
+        window.addEventListener('load', function() {{
+            adjustMosaicLayout();
+            setupModalEvents();
+        }});
         window.addEventListener('resize', adjustMosaicLayout);
 
         function loadTooltipImage(tileRegion) {{
@@ -445,11 +542,57 @@ where
             }}
         }}
 
+        function handleTileClick(imagePath, isWebCompatible, tileElement, tileImageUrl, distanceInfo, dateInfo) {{
+            if (isMobile()) {{
+                showMobileModal(tileImageUrl, distanceInfo, dateInfo);
+            }} else {{
+                openTileImage(imagePath, isWebCompatible);
+            }}
+        }}
+
+        function showMobileModal(imageUrl, distanceInfo, dateInfo) {{
+            const modal = document.getElementById('mobile-modal');
+            const modalImage = document.getElementById('modal-image');
+            const modalInfo = document.getElementById('modal-info');
+            
+            if (!modal || !modalImage || !modalInfo) return;
+            
+            modalImage.src = imageUrl;
+            modalInfo.innerHTML = distanceInfo + dateInfo;
+            modal.classList.add('active');
+            
+            // Prevent body scrolling when modal is open
+            document.body.style.overflow = 'hidden';
+        }}
+
+        function closeMobileModal() {{
+            const modal = document.getElementById('mobile-modal');
+            if (modal) {{
+                modal.classList.remove('active');
+                document.body.style.overflow = '';
+            }}
+        }}
+
+        // Close modal when clicking outside content
+        function setupModalEvents() {{
+            const modal = document.getElementById('mobile-modal');
+            if (modal) {{
+                modal.addEventListener('click', function(e) {{
+                    if (e.target === modal) {{
+                        closeMobileModal();
+                    }}
+                }});
+            }}
+        }}
+
         // Make functions globally accessible
         window.toggleDistanceOverlay = toggleDistanceOverlay;
         window.openTileImage = openTileImage;
         window.adjustMosaicLayout = adjustMosaicLayout;
         window.loadTooltipImage = loadTooltipImage;
+        window.handleTileClick = handleTileClick;
+        window.showMobileModal = showMobileModal;
+        window.closeMobileModal = closeMobileModal;
     </script>
 </head>
 <body>
@@ -605,14 +748,25 @@ where
             };
 
             html.push_str(&format!(r#"
-        <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" onclick="openTileImage('{}', {})" onmouseenter="loadTooltipImage(this)">
+        <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" 
+             onclick="handleTileClick('{}', {}, this, '{}', '{}', '{}')" 
+             onmouseenter="loadTooltipImage(this)"
+             data-tile-image="{}"
+             data-distance-info="{}"
+             data-date-info="{}">
             <div class="tooltip">
                 <img data-src="{}" alt="Tile Preview" class="tooltip-image" onerror="this.style.display='none'" style="display:none"/><br/>
                 {}
                 {}
             </div>
         </div>"#,
-                left_percent, top_percent, width_percent, height_percent, click_url, web_compat_flag,
+                left_percent, top_percent, width_percent, height_percent, 
+                click_url, web_compat_flag, tooltip_image_url, 
+                distance_info.replace("\"", "&quot;").replace("'", "&#39;"),
+                date_info.replace("\"", "&quot;").replace("'", "&#39;"),
+                tooltip_image_url,
+                distance_info.replace("\"", "&quot;").replace("'", "&#39;"),
+                date_info.replace("\"", "&quot;").replace("'", "&#39;"),
                 tooltip_image_url,
                 distance_info,
                 date_info
@@ -620,6 +774,18 @@ where
         }
 
         html.push_str("    </div>\n");
+
+        // Add mobile modal HTML
+        html.push_str(r#"
+    <!-- Mobile Modal -->
+    <div id="mobile-modal" class="mobile-modal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeMobileModal()">&times;</button>
+            <img id="modal-image" class="modal-image" alt="Tile Image" />
+            <div id="modal-info" class="modal-info"></div>
+        </div>
+    </div>
+"#);
 
         // Close HTML document
         html.push_str(
