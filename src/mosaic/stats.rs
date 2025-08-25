@@ -238,6 +238,9 @@ where
             cursor: pointer;
             transition: all 0.2s ease;
         }}
+        .tile-region:active {{
+            transform: scale(0.95);
+        }}
         .tile-region:hover {{
             background-color: rgba(255, 255, 0, 0.3);
             border: 2px solid #ffcc00;
@@ -389,14 +392,30 @@ where
             }}
         }}
 
-        // Also try to ensure the function is accessible globally
+        function openTileImage(imagePath, cwd) {{
+            // Convert file path to file:// URL for local files
+            let absolutePath;
+            if (imagePath.startsWith('/') || imagePath.match(/^[A-Za-z]:/)) {{
+                // Already absolute path
+                absolutePath = imagePath;
+            }} else {{
+                // Relative path, prepend cwd
+                absolutePath = cwd + '/' + imagePath;
+            }}
+            const fileUrl = 'file://' + absolutePath;
+            console.log('Opening tile image:', absolutePath);
+            window.open(fileUrl, '_blank');
+        }}
+
+        // Also try to ensure functions are accessible globally
         window.toggleDistanceOverlay = toggleDistanceOverlay;
+        window.openTileImage = openTileImage;
     </script>
 </head>
 <body>
     <div class="container">
         <h1>Mosaic Visualization</h1>
-        <p>Hover over any tile to see detailed information including distance score and source file.</p>
+        <p>Hover over any tile to see detailed information including distance score and source file. <strong>Click on any tile to open the original image in a new tab.</strong></p>
 
         <button id="distance-toggle-btn" class="distance-toggle" onclick="toggleDistanceOverlay()">Show Distance Overlay</button>
 
@@ -504,17 +523,33 @@ where
                 "distance-good"
             };
 
+            // Escape the path for JavaScript by replacing backslashes and quotes
+            let escaped_path = tile_path
+                .display()
+                .to_string()
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\"", "\\\"");
+
+            let cwd = std::env::current_dir().unwrap();
+            let escaped_cwd = cwd
+                .display()
+                .to_string()
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\"", "\\\"");
+
             html.push_str(&format!(r#"
-            <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;">
+            <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" onclick="openTileImage('{}', '{}')">
                 <div class="tooltip">
                     <strong>Tile Information</strong><br/>
                     Position: ({}, {})<br/>
                     <span class="{}">Distance: {:.3}</span><br/>
                     Flipped: {}<br/>
-                    Path: {}
+                    Path: {} <em>(click to open)</em>
                 </div>
             </div>"#,
-                left_percent, top_percent, width_percent, height_percent,
+                left_percent, top_percent, width_percent, height_percent, escaped_path, escaped_cwd,
                 x, y, distance_class, distance, tile.flipped,
                 tile_path.display()
             ));
