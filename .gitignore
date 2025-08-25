@@ -5,3 +5,4 @@
 *.png
 !example/*.png
 tiles
+.claude
