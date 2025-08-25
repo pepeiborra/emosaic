@@ -137,7 +137,7 @@ fn is_percentage(s: &str) -> Result<f64, String> {
     }
     Err(String::from("Value must be between 0 and 100"))
 }
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { backtrace_on_stack_overflow::enable() };
 
     let cli = Cli::parse();
@@ -150,30 +150,31 @@ fn main() {
         crop,
     } = cli;
 
-    let cache_path: PathBuf = dirs::cache_dir().unwrap().join("mosaic");
-    create_dir_all(cache_path).unwrap();
+    let cache_path: PathBuf = dirs::cache_dir()
+        .ok_or_else(|| "Failed to get cache directory")?
+        .join("mosaic");
+    create_dir_all(&cache_path)
+        .map_err(|e| format!("Failed to create cache directory {}: {}", cache_path.display(), e))?;
 
     match subcmd {
         None => (),
         Some(SubCommand::Prepare) => {
-            let tile = prepare_tile(&img, tile_size, crop).unwrap();
-            tile.save(&output_path).unwrap();
+            let tile = prepare_tile(&img, tile_size, crop)
+                .map_err(|e| format!("Failed to prepare tile from {}: {}", img.display(), e))?;
+            tile.save(&output_path)
+                .map_err(|e| format!("Failed to save tile to {}: {}", output_path.display(), e))?;
         }
         Some(SubCommand::Mosaic(
             args @ Mosaic {
                 mode, tint_opacity, ..
             },
         )) => {
-            let img_path = img;
+            let img_path = &img;
             // Open the source image
             eprintln!("Opening source image: {}", img_path.display());
-            let img = match image::open(img_path) {
-                Ok(img) => img.to_rgb8(),
-                Err(e) => {
-                    eprintln!("Failed to open source image: {}", e);
-                    std::process::exit(1);
-                }
-            };
+            let img = image::open(img_path)
+                .map_err(|e| format!("Failed to open source image {}: {}", img_path.display(), e))?
+                .to_rgb8();
 
             let img_and_stats = match mode {
                 Mode::_1 => n_to_1::<1>(args, &img, tile_size, crop),
@@ -194,10 +195,12 @@ fn main() {
                     let mut tile_set = TileSet::<()>::new();
                     let extensions: HashSet<String> =
                         args.extensions.iter().map(|x| x.to_owned()).collect();
-                    for path_buf in images.unwrap() {
+                    for path_buf in images.map_err(|e| format!("Failed to find images in {}: {}", args.tiles_dir.display(), e))? {
                         if let Some(ext) = path_buf.extension() {
-                            if extensions.contains(ext.to_str().unwrap()) && path_buf.exists() {
-                                tile_set.push_tile(path_buf, ());
+                            if let Some(ext_str) = ext.to_str() {
+                                if extensions.contains(ext_str) && path_buf.exists() {
+                                    tile_set.push_tile(path_buf, ());
+                                }
                             }
                         }
                     }
@@ -207,8 +210,7 @@ fn main() {
                         stats_img: None,
                     })
                 }
-            }
-            .unwrap();
+            }.map_err(|e| format!("Mosaic generation failed: {}", e))?;
 
             let output = img_and_stats.img;
             if tint_opacity > 0.0 {
@@ -231,23 +233,27 @@ fn main() {
                 let mut output2 = DynamicImage::ImageRgb8(output).to_rgba8();
                 imageops::overlay(&mut output2, &overlay, 0, 0);
                 let format = ImageFormat::Png;
-                output2.save_with_format(output_path, format).unwrap();
-                return;
+                output2.save_with_format(&output_path, format)
+                    .map_err(|e| format!("Failed to save output image to {}: {}", output_path.display(), e))?;
+                return Ok(());
             }
 
             eprintln!("Writing output file to {}", output_path.display());
             output
-                .save_with_format(output_path.clone(), ImageFormat::Png)
-                .unwrap();
+                .save_with_format(&output_path, ImageFormat::Png)
+                .map_err(|e| format!("Failed to save output image to {}: {}", output_path.display(), e))?;
+            
             if let Some(stats_img) = img_and_stats.stats_img {
                 let stats_path = output_path.with_extension("stats.png");
                 eprintln!("Writing stats file to {}", stats_path.display());
                 stats_img
-                    .save_with_format(stats_path, ImageFormat::Png)
-                    .unwrap();
+                    .save_with_format(&stats_path, ImageFormat::Png)
+                    .map_err(|e| format!("Failed to save stats image to {}: {}", stats_path.display(), e))?;
             }
         }
     }
+    
+    Ok(())
 }
 
 struct ImgAndStats {
@@ -329,16 +335,17 @@ where
         fs::read(&analysis_cache_path).ok()
     };
     let tile_set: TileSet<[Rgb<u8>; N]> = tile_set
-        .map(|bytes| {
-            let analysis: TileSet<[Rgb<u8>; N]> = bincode::deserialize(&bytes).unwrap();
-            // validate the analysis: check that all the paths exist
+        .and_then(|bytes| {
+            bincode::deserialize::<TileSet<[Rgb<u8>; N]>>(&bytes).ok()
+        })
+        .map(|analysis| {
             eprintln!("Reusing analysis cache");
             analysis
                 .tiles
                 .par_iter()
                 .filter_map(|tile| {
                     let path = analysis.get_path(tile);
-                    let extension = path.extension().unwrap().to_str().unwrap();
+                    let extension = path.extension()?.to_str()?;
                     if path.exists() && extensions.contains(extension) {
                         Some((path.to_owned(), tile.colors))
                     } else {
@@ -351,7 +358,7 @@ where
             let extensions = extensions.iter().map(OsString::from).collect();
             let tile_set = generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop).unwrap();
             let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
-            fs::write(analysis_cache_path, encoded_tile_set).unwrap();
+            fs::write(&analysis_cache_path, encoded_tile_set).unwrap();
             tile_set
         });
     eprintln!("Tile set with {} tiles", tile_set.len());
