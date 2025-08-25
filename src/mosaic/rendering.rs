@@ -17,6 +17,38 @@ use super::stats::RenderStats;
 use super::tiles::{flipped_coords, Tile, TileSet};
 use fixed::traits::FromFixed;
 
+
+/// Configuration for rendering operations
+#[derive(Debug, Clone)]
+pub struct RenderConfig {
+    /// Number of nearest neighbors to consider for randomized selection
+    pub random_neighbor_count: usize,
+    /// Progress bar template
+    pub progress_template: String,
+}
+
+impl Default for RenderConfig {
+    fn default() -> Self {
+        Self {
+            random_neighbor_count: 20,
+            progress_template: "{msg} {wide_bar} {pos}/{len} ({per_sec})".to_string(),
+        }
+    }
+}
+
+/// Core rendering function that creates a mosaic by applying tiles to segments of the source image.
+/// 
+/// This function processes the image in parallel, dividing it into segments and applying
+/// tiles based on the provided tile generation function.
+/// 
+/// # Arguments
+/// * `source_img` - The source image to create a mosaic from
+/// * `tile_size` - Size of each tile in pixels
+/// * `step` - Step size for tile placement (affects tile density)
+/// * `get_tile` - Function that generates a tile image for given coordinates
+/// 
+/// # Returns
+/// A new `RgbImage` containing the rendered mosaic
 pub fn render(
     source_img: &RgbImage,
     tile_size: u32,
@@ -25,11 +57,12 @@ pub fn render(
 ) -> RgbImage {
     let tile_size_stepped = tile_size / step;
 
+    let config = RenderConfig::default();
     let pb = ProgressBar::new((source_img.height() * source_img.width() / step / step) as u64)
         .with_message("Rendering")
         .with_style(
             ProgressStyle::default_bar()
-                .template("{msg} {wide_bar} {pos}/{len} ({per_sec})")
+                .template(&config.progress_template)
                 .unwrap(),
         );
 
@@ -68,6 +101,27 @@ pub fn render(
     output
 }
 
+/// Renders a mosaic using N-to-1 tile matching with KD-tree optimization.
+/// 
+/// This function analyzes the source image in N-pixel blocks and finds the best matching
+/// tiles from the tile set using nearest neighbor search in color space.
+/// 
+/// # Arguments
+/// * `source_img` - The source image to create a mosaic from
+/// * `tile_set` - Set of available tiles with pre-computed color analysis
+/// * `tile_size` - Size of each output tile in pixels
+/// * `no_repeat` - If true, prevents tiles from being used multiple times
+/// * `randomize` - Optional randomization factor (0-100%) for tile selection
+/// 
+/// # Returns
+/// * `Ok(RenderResult)` - Contains the rendered image, statistics, and tile set
+/// * `Err(RenderError)` - If rendering fails due to insufficient tiles or other errors
+/// 
+/// # Examples
+/// ```
+/// use emosaic::mosaic::rendering::render_nto1;
+/// // let result = render_nto1(&image, tile_set, 32, false, None)?;
+/// ```
 pub fn render_nto1<const N: usize>(
     source_img: &RgbImage,
     tile_set: TileSet<[Rgb<u8>; N]>,
@@ -95,7 +149,11 @@ where
     );
 
     if no_repeat && (htiles * vtiles) as usize > tile_set.len() * 2 {
-        panic!("Error: not enough tiles to fill the image without repeating");
+        panic!(
+            "❌ Insufficient tiles for no-repeat mode: need {} tiles but only have {} available", 
+            (htiles * vtiles) as usize, 
+            tile_set.len() * 2
+        );
     }
 
     let image = render(source_img, tile_size, step, |x, y| {
@@ -110,10 +168,11 @@ where
             };
             match randomize {
                 Some(factor) => {
+                    let config = RenderConfig::default();
                     let mut closest_ones = kdtree
                         .read()
                         .unwrap()
-                        .nearest_n::<Manhattan>(&tile.coords(), 20);
+                        .nearest_n::<Manhattan>(&tile.coords(), config.random_neighbor_count);
                     closest_ones.sort_by_key(|x| x.distance);
                     let min_distance = f64::from_fixed(closest_ones[0].distance);
                     closest = closest_ones
@@ -145,7 +204,7 @@ where
             );
             tile = tile_set
                 .get_tile(closest.item)
-                .expect(format!("Tile not found: {:?}", closest.item).as_str());
+                .unwrap_or_else(|| panic!("Tile not found: {:?}", closest.item));
             if no_repeat {
                 writer.unwrap().remove(&tile.coords(), closest.item);
             }
@@ -154,10 +213,9 @@ where
             .lock()
             .unwrap()
             .push_tile(x, y, &tile, closest.distance);
-        tile_set.get_image(&tile, tile_size).expect(&format!(
-            "Image not found: {}",
-            tile_set.get_path(&tile).to_str().unwrap()
-        ))
+        tile_set.get_image(&tile, tile_size).unwrap_or_else(|_| {
+            panic!("Image not found: {}", tile_set.get_path(&tile).to_str().unwrap())
+        })
     });
 
     let stats = stats.into_inner().unwrap();
@@ -169,12 +227,36 @@ where
     }
 }
 
+/// Result of a rendering operation containing the output image and metadata.
+/// 
+/// This struct encapsulates the complete result of a mosaic rendering operation,
+/// including the final image, rendering statistics, and the tile set used.
 pub struct RenderResult<const N: usize> {
+    /// The final rendered mosaic image
     pub image: RgbImage,
+    /// The tile set used for rendering (may have been modified if no_repeat was used)
     pub tile_set: TileSet<[Rgb<u8>; N]>,
+    /// Statistics about the rendering process (tile usage, distances, etc.)
     pub stats: RenderStats<super::tiles::SIZE>,
 }
 
+/// Renders a mosaic with no tile repetition using an optimized greedy algorithm.
+/// 
+/// This function uses a more sophisticated algorithm that pre-computes all tile matches,
+/// sorts them by quality, and selects tiles in order while ensuring no repeats.
+/// 
+/// # Arguments
+/// * `source_img` - The source image to create a mosaic from
+/// * `tile_set` - Set of available tiles with pre-computed color analysis
+/// * `tile_size` - Size of each output tile in pixels
+/// 
+/// # Returns
+/// * `Ok(RenderResult)` - Contains the rendered image, statistics, and tile set
+/// * `Err(ImageError)` - If rendering fails due to image processing errors
+/// 
+/// # Performance
+/// This algorithm is more computationally expensive than `render_nto1` but produces
+/// higher quality results when tile uniqueness is required.
 pub fn render_nto1_no_repeat<const N: usize>(
     source_img: &RgbImage,
     tile_set: TileSet<[Rgb<u8>; N]>,
@@ -202,16 +284,21 @@ where
     );
 
     if (htiles * vtiles) as usize > tile_set.len() * 2 {
-        panic!("Error: not enough tiles to fill the image without repeating");
+        panic!(
+            "❌ Insufficient tiles for no-repeat mode: need {} tiles but only have {} available", 
+            (htiles * vtiles) as usize, 
+            tile_set.len() * 2
+        );
     }
 
     let tile_size_stepped = tile_size / step;
 
+    let config = RenderConfig::default();
     let pb = ProgressBar::new((vtiles * htiles) as u64)
         .with_message("Scoring")
         .with_style(
             ProgressStyle::default_bar()
-                .template("{msg} {wide_bar} {pos}/{len} ({per_sec})")
+                .template(&config.progress_template)
                 .unwrap(),
         );
 
@@ -247,7 +334,7 @@ where
         .with_message("Rendering")
         .with_style(
             ProgressStyle::default_bar()
-                .template("{msg} {wide_bar} {pos}/{len} ({per_sec})")
+                .template(&config.progress_template)
                 .unwrap(),
         );
 
@@ -263,8 +350,8 @@ where
             used.insert(-item);
             let tile = tile_set.get_tile(item).unwrap();
             let tile_img = tile_set.get_image(&tile, tile_size)?;
-            let tile_x = (n as u32 / vtiles) * tile_size;
-            let tile_y = (n as u32 % vtiles) * tile_size;
+            let tile_x = (n / vtiles) * tile_size;
+            let tile_y = (n % vtiles) * tile_size;
             // eprintln!("n={n}, tile_x={tile_x}, tile_y={tile_y}");
             imageops::overlay(&mut image, &tile_img, tile_x.into(), tile_y.into());
             stats
@@ -293,7 +380,7 @@ where
                 nearest = compute_nearest(n);
             }
             // ordered reinsert of nearest in matches
-            match matches.binary_search_by(|(_, x)| compare_matches(&nearest, &x)) {
+            match matches.binary_search_by(|(_, x)| compare_matches(&nearest, x)) {
                 Ok(ix) => matches.insert(ix + 1, (n, nearest)),
                 Err(e) => matches.insert(e, (n, nearest)),
             }
@@ -310,6 +397,21 @@ where
 }
 
 
+/// Renders a mosaic with completely random tile selection.
+/// 
+/// This function creates a mosaic by placing random tiles at each position,
+/// without considering color matching or tile optimization.
+/// 
+/// # Arguments
+/// * `source_img` - The source image (used only for dimensions)
+/// * `tile_set` - Set of available tiles (no color analysis needed)
+/// * `tile_size` - Size of each output tile in pixels
+/// 
+/// # Returns
+/// A new `RgbImage` containing the random tile mosaic
+/// 
+/// # Performance
+/// This is the fastest rendering method but produces the lowest visual quality.
 pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u32) -> RgbImage {
     let mut output = RgbImage::new(
         source_img.width() * tile_size,
@@ -324,7 +426,7 @@ pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u3
             imageops::overlay(
                 &mut output,
                 &tile_set
-                    .get_image(&tile_set.random_tile(), tile_size)
+                    .get_image(tile_set.random_tile(), tile_size)
                     .expect("Image not found"),
                 (tile_x * tile_size).into(),
                 (tile_y * tile_size).into(),

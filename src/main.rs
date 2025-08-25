@@ -527,10 +527,10 @@ where
         });
     eprintln!("Tile set with {} tiles", tile_set.len());
     let result = if no_repeat && !greedy {
-        render_nto1_no_repeat(&img, tile_set, tile_size)
+        render_nto1_no_repeat(&img, tile_set, tile_size)?
     } else {
-        Ok(render_nto1(&img, tile_set, tile_size, no_repeat, randomize))
-    }?;
+        render_nto1(&img, tile_set, tile_size, no_repeat, randomize)
+    };
 
     result.stats.summarise(&result.tile_set);
     Ok(ImgAndStats {
