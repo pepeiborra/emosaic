@@ -437,10 +437,19 @@ where
         window.addEventListener('load', adjustMosaicLayout);
         window.addEventListener('resize', adjustMosaicLayout);
 
+        function loadTooltipImage(tileRegion) {{
+            const img = tileRegion.querySelector('.tooltip-image');
+            if (img && img.dataset.src && !img.src) {{
+                img.src = img.dataset.src;
+                img.style.display = 'block';
+            }}
+        }}
+
         // Make functions globally accessible
         window.toggleDistanceOverlay = toggleDistanceOverlay;
         window.openTileImage = openTileImage;
         window.adjustMosaicLayout = adjustMosaicLayout;
+        window.loadTooltipImage = loadTooltipImage;
     </script>
 </head>
 <body>
@@ -596,9 +605,9 @@ where
             };
 
             html.push_str(&format!(r#"
-        <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" onclick="openTileImage('{}', {})">
+        <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" onclick="openTileImage('{}', {})" onmouseenter="loadTooltipImage(this)">
             <div class="tooltip">
-                <img src="{}" alt="Tile Preview" class="tooltip-image" onerror="this.style.display='none'"/><br/>
+                <img data-src="{}" alt="Tile Preview" class="tooltip-image" onerror="this.style.display='none'" style="display:none"/><br/>
                 {}
                 {}
             </div>
