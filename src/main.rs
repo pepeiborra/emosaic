@@ -137,6 +137,82 @@ fn is_percentage(s: &str) -> Result<f64, String> {
     }
     Err(String::from("Value must be between 0 and 100"))
 }
+
+/// Validates that the tile size is reasonable and divisible by required dimensions
+fn validate_tile_size(tile_size: u32) -> Result<(), String> {
+    if tile_size == 0 {
+        return Err(
+            "❌ Tile size must be greater than 0\n💡 Try using a value like 16, 32, or 64"
+                .to_string(),
+        );
+    }
+    if tile_size > 1024 {
+        return Err("❌ Tile size is too large (maximum: 1024)\n💡 Large tile sizes require significant memory and processing time".to_string());
+    }
+    Ok(())
+}
+
+/// Validates that the input image path exists and is a valid image format
+fn validate_input_image(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!(
+            "❌ Input image does not exist: {}\n💡 Check the file path and ensure the file exists",
+            path.display()
+        ));
+    }
+    if !path.is_file() {
+        return Err(format!("❌ Input path is not a file: {}\n💡 Please provide a path to an image file, not a directory", path.display()));
+    }
+
+    let valid_extensions = ["jpg", "jpeg", "png", "bmp", "gif", "tiff", "webp"];
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_lowercase();
+        if !valid_extensions.contains(&ext_lower.as_str()) {
+            return Err(format!(
+                "❌ Unsupported image format: {}\n💡 Supported formats: {}",
+                ext,
+                valid_extensions.join(", ")
+            ));
+        }
+    } else {
+        return Err(format!("❌ Input file has no extension\n💡 Please use an image file with a proper extension like .jpg or .png"));
+    }
+
+    Ok(())
+}
+
+/// Validates that the tiles directory exists and contains images
+fn validate_tiles_directory(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!(
+            "❌ Tiles directory does not exist: {}\n💡 Create the directory and add image files to use as tiles",
+            path.display()
+        ));
+    }
+    if !path.is_dir() {
+        return Err(format!("❌ Tiles path is not a directory: {}\n💡 Please provide a path to a directory containing tile images", path.display()));
+    }
+    Ok(())
+}
+
+/// Validates that the output directory exists and is writable
+fn validate_output_path(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            return Err(format!(
+                "Output directory does not exist: {}",
+                parent.display()
+            ));
+        }
+        if !parent.is_dir() {
+            return Err(format!(
+                "Output parent path is not a directory: {}",
+                parent.display()
+            ));
+        }
+    }
+    Ok(())
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { backtrace_on_stack_overflow::enable() };
 
@@ -150,11 +226,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         crop,
     } = cli;
 
+    // Validate CLI arguments
+    validate_tile_size(tile_size)?;
+    validate_input_image(&img)?;
+    validate_output_path(&output_path)?;
+
     let cache_path: PathBuf = dirs::cache_dir()
         .ok_or_else(|| "Failed to get cache directory")?
         .join("mosaic");
-    create_dir_all(&cache_path)
-        .map_err(|e| format!("Failed to create cache directory {}: {}", cache_path.display(), e))?;
+    create_dir_all(&cache_path).map_err(|e| {
+        format!(
+            "Failed to create cache directory {}: {}",
+            cache_path.display(),
+            e
+        )
+    })?;
 
     match subcmd {
         None => (),
@@ -164,11 +250,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tile.save(&output_path)
                 .map_err(|e| format!("Failed to save tile to {}: {}", output_path.display(), e))?;
         }
-        Some(SubCommand::Mosaic(
-            args @ Mosaic {
-                mode, tint_opacity, ..
-            },
-        )) => {
+        Some(SubCommand::Mosaic(args)) => {
+            // Validate tiles directory
+            validate_tiles_directory(&args.tiles_dir)?;
+            
+            let mode = args.mode;
+            let tint_opacity = args.tint_opacity;
             let img_path = &img;
             // Open the source image
             eprintln!("Opening source image: {}", img_path.display());
@@ -195,7 +282,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut tile_set = TileSet::<()>::new();
                     let extensions: HashSet<String> =
                         args.extensions.iter().map(|x| x.to_owned()).collect();
-                    for path_buf in images.map_err(|e| format!("Failed to find images in {}: {}", args.tiles_dir.display(), e))? {
+                    for path_buf in images.map_err(|e| {
+                        format!(
+                            "Failed to find images in {}: {}",
+                            args.tiles_dir.display(),
+                            e
+                        )
+                    })? {
                         if let Some(ext) = path_buf.extension() {
                             if let Some(ext_str) = ext.to_str() {
                                 if extensions.contains(ext_str) && path_buf.exists() {
@@ -210,7 +303,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         stats_img: None,
                     })
                 }
-            }.map_err(|e| format!("Mosaic generation failed: {}", e))?;
+            }
+            .map_err(|e| format!("Mosaic generation failed: {}", e))?;
 
             let output = img_and_stats.img;
             if tint_opacity > 0.0 {
@@ -233,26 +327,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut output2 = DynamicImage::ImageRgb8(output).to_rgba8();
                 imageops::overlay(&mut output2, &overlay, 0, 0);
                 let format = ImageFormat::Png;
-                output2.save_with_format(&output_path, format)
-                    .map_err(|e| format!("Failed to save output image to {}: {}", output_path.display(), e))?;
+                output2
+                    .save_with_format(&output_path, format)
+                    .map_err(|e| {
+                        format!(
+                            "Failed to save output image to {}: {}",
+                            output_path.display(),
+                            e
+                        )
+                    })?;
                 return Ok(());
             }
 
-            eprintln!("Writing output file to {}", output_path.display());
+            eprintln!("✓ Mosaic generation completed successfully");
+            eprintln!("📝 Writing output file to {}", output_path.display());
             output
                 .save_with_format(&output_path, ImageFormat::Png)
-                .map_err(|e| format!("Failed to save output image to {}: {}", output_path.display(), e))?;
-            
+                .map_err(|e| {
+                    format!(
+                        "❌ Failed to save output image to {}: {}\n💡 Ensure the directory is writable and has sufficient disk space",
+                        output_path.display(),
+                        e
+                    )
+                })?;
+
             if let Some(stats_img) = img_and_stats.stats_img {
                 let stats_path = output_path.with_extension("stats.png");
-                eprintln!("Writing stats file to {}", stats_path.display());
+                eprintln!(
+                    "📊 Writing statistics visualization to {}",
+                    stats_path.display()
+                );
                 stats_img
                     .save_with_format(&stats_path, ImageFormat::Png)
-                    .map_err(|e| format!("Failed to save stats image to {}: {}", stats_path.display(), e))?;
+                    .map_err(|e| {
+                        format!(
+                            "⚠️  Failed to save statistics image to {}: {}\n💡 This is non-critical - the main mosaic was saved successfully",
+                            stats_path.display(),
+                            e
+                        )
+                    })?;
+                eprintln!("📊 Statistics file saved (shows tile matching quality)");
             }
+
+            eprintln!("🎉 All done! Your mosaic is ready at {}", output_path.display());
         }
     }
-    
+
     Ok(())
 }
 
@@ -335,9 +455,7 @@ where
         fs::read(&analysis_cache_path).ok()
     };
     let tile_set: TileSet<[Rgb<u8>; N]> = tile_set
-        .and_then(|bytes| {
-            bincode::deserialize::<TileSet<[Rgb<u8>; N]>>(&bytes).ok()
-        })
+        .and_then(|bytes| bincode::deserialize::<TileSet<[Rgb<u8>; N]>>(&bytes).ok())
         .map(|analysis| {
             eprintln!("Reusing analysis cache");
             analysis
