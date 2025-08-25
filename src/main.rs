@@ -10,6 +10,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs::create_dir_all;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
+use std::time::Instant;
 use std::{fs, io};
 
 use clap::{self, Args, Parser, Subcommand, ValueEnum};
@@ -138,6 +139,45 @@ fn is_percentage(s: &str) -> Result<f64, String> {
     Err(String::from("Value must be between 0 and 100"))
 }
 
+fn print_runtime_stats(start_time: Instant) {
+    let duration = start_time.elapsed();
+    let total_secs = duration.as_secs_f64();
+
+    eprintln!("📊 Runtime Statistics:");
+    eprintln!("   Total execution time: {:.2}s", total_secs);
+
+    if total_secs >= 60.0 {
+        let mins = total_secs as u64 / 60;
+        let secs = total_secs % 60.0;
+        eprintln!("   ({} min {:.1}s)", mins, secs);
+    }
+
+    if total_secs >= 1.0 {
+        eprintln!("   Peak memory usage: {} MB", get_peak_memory_usage_mb());
+    }
+}
+
+fn get_peak_memory_usage_mb() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let output = Command::new("ps")
+            .args(["-o", "rss=", "-p"])
+            .arg(std::process::id().to_string())
+            .output();
+
+        if let Ok(output) = output {
+            if let Ok(rss_str) = String::from_utf8(output.stdout) {
+                if let Ok(rss_kb) = rss_str.trim().parse::<u64>() {
+                    return format!("{:.1}", rss_kb as f64 / 1024.0);
+                }
+            }
+        }
+    }
+
+    "N/A".to_string()
+}
+
 /// Validates that the tile size is reasonable and divisible by required dimensions
 fn validate_tile_size(tile_size: u32) -> Result<(), String> {
     if tile_size == 0 {
@@ -216,6 +256,8 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { backtrace_on_stack_overflow::enable() };
 
+    let start_time = Instant::now();
+
     let cli = Cli::parse();
 
     let Cli {
@@ -249,6 +291,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("Failed to prepare tile from {}: {}", img.display(), e))?;
             tile.save(&output_path)
                 .map_err(|e| format!("Failed to save tile to {}: {}", output_path.display(), e))?;
+            print_runtime_stats(start_time);
         }
         Some(SubCommand::Mosaic(args)) => {
             // Validate tiles directory
@@ -336,6 +379,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             e
                         )
                     })?;
+                print_runtime_stats(start_time);
                 return Ok(());
             }
 
@@ -370,9 +414,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             eprintln!("🎉 All done! Your mosaic is ready at {}", output_path.display());
+            print_runtime_stats(start_time);
         }
     }
 
+    print_runtime_stats(start_time);
     Ok(())
 }
 
