@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::io::Write;
 
 use image::{ImageBuffer, Rgb, RgbImage};
 
@@ -9,6 +10,7 @@ use super::tiles::{Tile, TileSet};
 /// 
 /// Tracks tile placement positions, distances, and usage patterns
 /// to provide analytics about the mosaic generation process.
+#[derive(Clone)]
 pub struct RenderStats<D> {
     /// Maps tile positions (x, y) to tiles with distance information
     tiles: HashMap<(u32, u32), Tile<D>>,
@@ -159,6 +161,301 @@ where
         }
         
         image
+    }
+
+    /// Generate an HTML file with the mosaic image and interactive tooltips.
+    /// 
+    /// Creates an HTML document embedding the mosaic image with CSS-based tooltips
+    /// that appear on hover, showing tile distance scores and original file paths.
+    /// 
+    /// # Arguments
+    /// * `mosaic_image_path` - Path to the generated mosaic JPEG image
+    /// * `output_path` - Path where the HTML file should be written
+    /// * `tile_set` - The tile set used for generating the mosaic
+    /// * `tile_size` - Size of each tile in pixels for coordinate conversion
+    /// 
+    /// # Returns
+    /// * `Ok(())` - If HTML file was successfully generated
+    /// * `Err(std::io::Error)` - If file writing failed
+    pub fn generate_html<T>(
+        &self,
+        mosaic_image_path: &Path,
+        output_path: &Path, 
+        tile_set: &TileSet<T>,
+        tile_size: u32,
+    ) -> Result<(), std::io::Error> {
+        if self.tiles.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No tiles recorded in statistics"
+            ));
+        }
+
+        let mut html = String::new();
+        
+        // HTML document structure
+        html.push_str(&format!(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mosaic Visualization - {}</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }}
+        .container {{
+            max-width: 100%;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }}
+        .mosaic-container {{
+            position: relative;
+            display: inline-block;
+            margin: 20px 0;
+        }}
+        .mosaic-image {{
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }}
+        .tile-region {{
+            position: absolute;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }}
+        .tile-region:hover {{
+            background-color: rgba(255, 255, 0, 0.3);
+            border: 2px solid #ffcc00;
+            z-index: 10;
+        }}
+        .tooltip {{
+            position: absolute;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: nowrap;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 1000;
+            max-width: 1500px;
+            word-wrap: break-word;
+            white-space: normal;
+        }}
+        .tile-region:hover .tooltip {{
+            opacity: 1;
+        }}
+        .stats {{
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }}
+        .stats h2 {{
+            margin-top: 0;
+            color: #333;
+        }}
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }}
+        .stats-section {{
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }}
+        .stats-section h3 {{
+            margin-top: 0;
+            color: #555;
+        }}
+        .tile-info {{
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }}
+        .tile-info:last-child {{
+            border-bottom: none;
+        }}
+        .distance-good {{ color: #28a745; }}
+        .distance-medium {{ color: #ffc107; }}
+        .distance-bad {{ color: #dc3545; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Mosaic Visualization</h1>
+        <p>Hover over any tile to see detailed information including distance score and source file.</p>
+        
+        <div class="mosaic-container">
+            <img src="{}" alt="Mosaic Image" class="mosaic-image" />
+"#, 
+            mosaic_image_path.file_name().unwrap_or_default().to_string_lossy(),
+            mosaic_image_path.file_name().unwrap_or_default().to_string_lossy()
+        ));
+
+        // Calculate image dimensions and tile positions
+        let max_x = self.tiles.keys().map(|(x, _)| *x).max().unwrap_or(0);
+        let max_y = self.tiles.keys().map(|(_, y)| *y).max().unwrap_or(0);
+        let image_width = max_x + tile_size;
+        let image_height = max_y + tile_size;
+
+        // Find distance range for color coding
+        let distances: Vec<f64> = self.tiles.values().map(|t| t.colors.into()).collect();
+        let min_distance = distances.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let max_distance = distances.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let distance_range = max_distance - min_distance;
+
+        // Generate tile regions with tooltips
+        for ((x, y), tile) in &self.tiles {
+            let distance: f64 = tile.colors.into();
+            let tile_path = tile_set.get_path(tile);
+            
+            // Calculate relative position as percentage of image size
+            let left_percent = (*x as f64 / image_width as f64) * 100.0;
+            let top_percent = (*y as f64 / image_height as f64) * 100.0;
+            let width_percent = (tile_size as f64 / image_width as f64) * 100.0;
+            let height_percent = (tile_size as f64 / image_height as f64) * 100.0;
+            
+            // Determine distance color class
+            let distance_class = if distance_range > 0.0 {
+                let normalized = (distance - min_distance) / distance_range;
+                if normalized < 0.33 { "distance-good" }
+                else if normalized < 0.67 { "distance-medium" }
+                else { "distance-bad" }
+            } else {
+                "distance-good"
+            };
+
+            html.push_str(&format!(r#"
+            <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;">
+                <div class="tooltip">
+                    <strong>Tile Information</strong><br/>
+                    Position: ({}, {})<br/>
+                    <span class="{}">Distance: {:.3}</span><br/>
+                    Flipped: {}<br/>
+                    Path: {}
+                </div>
+            </div>"#,
+                left_percent, top_percent, width_percent, height_percent,
+                x, y, distance_class, distance, tile.flipped,
+                tile_path.display()
+            ));
+        }
+
+        html.push_str("        </div>\n");
+
+        // Generate statistics section
+        self.append_stats_html(&mut html, tile_set);
+
+        // Close HTML document
+        html.push_str(r#"
+    </div>
+</body>
+</html>"#);
+
+        // Write HTML file
+        let mut file = std::fs::File::create(output_path)?;
+        file.write_all(html.as_bytes())?;
+        
+        Ok(())
+    }
+
+    /// Helper function to append statistics section to HTML
+    fn append_stats_html<T>(&self, html: &mut String, tile_set: &TileSet<T>) {
+        // Calculate basic statistics
+        let mut total_distance: D = 0_u8.into();
+        let mut tile_usage_count: HashMap<&Path, u16> = HashMap::new();
+        
+        for tile in self.tiles.values() {
+            total_distance += tile.colors;
+            let path = tile_set.get_path(tile);
+            *tile_usage_count.entry(path).or_insert(0) += 1;
+        }
+
+        let unique_tiles = tile_usage_count.len();
+        let total_distance_f64: f64 = total_distance.into();
+        let tile_count = self.tiles.len() as f64;
+        let avg_distance = total_distance_f64 / tile_count;
+
+        html.push_str(&format!(r#"
+        <div class="stats">
+            <h2>Mosaic Statistics</h2>
+            <div class="stats-grid">
+                <div class="stats-section">
+                    <h3>Overview</h3>
+                    <div class="tile-info">
+                        <span>Total tiles placed:</span>
+                        <span>{}</span>
+                    </div>
+                    <div class="tile-info">
+                        <span>Unique images used:</span>
+                        <span>{}</span>
+                    </div>
+                    <div class="tile-info">
+                        <span>Average distance:</span>
+                        <span>{:.3}</span>
+                    </div>
+                </div>
+"#, self.tiles.len(), unique_tiles, avg_distance));
+
+        // Most used tiles
+        let mut usage_by_count: Vec<_> = tile_usage_count.into_iter().collect();
+        usage_by_count.sort_by(|(_, a), (_, b)| b.cmp(a));
+
+        html.push_str(r#"
+                <div class="stats-section">
+                    <h3>Most Used Tiles</h3>
+"#);
+        
+        for (i, (path, count)) in usage_by_count.iter().take(10).enumerate() {
+            html.push_str(&format!(r#"
+                    <div class="tile-info">
+                        <span>{}. {}</span>
+                        <span>{} times</span>
+                    </div>
+"#, i + 1, path.file_name().unwrap_or_default().to_string_lossy(), count));
+        }
+
+        html.push_str("                </div>\n");
+
+        // Worst matches
+        let mut worst_matches: Vec<_> = self.tiles.values().collect();
+        worst_matches.sort_by(|a, b| b.colors.cmp(&a.colors));
+
+        html.push_str(r#"
+                <div class="stats-section">
+                    <h3>Worst Matches</h3>
+"#);
+
+        for (i, tile) in worst_matches.iter().take(10).enumerate() {
+            let path = tile_set.get_path(tile);
+            let distance: f64 = tile.colors.into();
+            html.push_str(&format!(r#"
+                    <div class="tile-info">
+                        <span>{}. {}</span>
+                        <span class="distance-bad">{:.3}</span>
+                    </div>
+"#, i + 1, path.file_name().unwrap_or_default().to_string_lossy(), distance));
+        }
+
+        html.push_str(r#"
+                </div>
+            </div>
+        </div>
+"#);
     }
 }
 

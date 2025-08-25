@@ -15,7 +15,7 @@ pub use rendering::{render_nto1, render_nto1_no_repeat, render_random};
 mod tests {
     use itertools::Itertools;
     use num_integer::Roots;
-    use rayon::iter::IntoParallelRefIterator;
+    use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
     use super::*;
     use std::path::PathBuf;

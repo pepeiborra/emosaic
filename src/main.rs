@@ -92,6 +92,10 @@ struct Mosaic {
     #[clap(long)]
     /// When combined with no-repeat, uses a less accurate but faster algorithm
     greedy: bool,
+
+    #[clap(long)]
+    /// Generate HTML output with interactive tile tooltips showing distance and path
+    html: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -344,6 +348,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(ImgAndStats {
                         img: render_random(&img, tile_set, tile_size),
                         stats_img: None,
+                        html_generator: None,
                     })
                 }
             }
@@ -413,7 +418,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("📊 Statistics file saved (shows tile matching quality)");
             }
 
-            eprintln!("🎉 All done! Your mosaic is ready at {}", output_path.display());
+            // Generate HTML file if requested
+            if let Some(html_generator) = img_and_stats.html_generator {
+                let html_path = output_path.with_extension("html");
+                eprintln!("📄 Generating interactive HTML at {}", html_path.display());
+
+                html_generator(&output_path, &html_path)
+                    .map_err(|e| format!("⚠️  Failed to generate HTML file: {}", e))?;
+
+                eprintln!("📄 Interactive HTML file saved (hover over tiles for details)");
+            }
+
+            eprintln!(
+                "🎉 All done! Your mosaic is ready at {}",
+                output_path.display()
+            );
             print_runtime_stats(start_time);
         }
     }
@@ -425,6 +444,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct ImgAndStats {
     img: image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
     stats_img: Option<image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>,
+    // Store HTML generation data as a closure that can be called later
+    html_generator: Option<
+        Box<dyn FnOnce(&std::path::Path, &std::path::Path) -> Result<(), std::io::Error> + Send>,
+    >,
 }
 
 fn n_to_1<const N: usize>(
@@ -436,6 +459,7 @@ fn n_to_1<const N: usize>(
         randomize,
         tiles_dir,
         greedy,
+        html,
         ..
     }: Mosaic,
     original_img: &image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
@@ -533,9 +557,34 @@ where
     };
 
     result.stats.summarise(&result.tile_set);
+
+    // Extract data and create HTML generator if requested
+    let image = result.image;
+    let stats = result.stats;
+    let tile_set = result.tile_set;
+
+    // Clone for different uses
+    let stats_for_render = stats.clone();
+    let stats_img = Some(stats_for_render.render(tile_size));
+
+    let html_generator = if html {
+        eprintln!("📄 HTML output requested - will generate after image save");
+        
+        // Clone the necessary data for the closure
+        let stats_clone = stats.clone();
+        let tile_set_clone = tile_set.clone();
+        let ts = tile_size;
+        Some(Box::new(move |mosaic_path: &std::path::Path, html_path: &std::path::Path| -> Result<(), std::io::Error> {
+            stats_clone.generate_html(mosaic_path, html_path, &tile_set_clone, ts)
+        }) as Box<dyn FnOnce(&std::path::Path, &std::path::Path) -> Result<(), std::io::Error> + Send>)
+    } else {
+        None
+    };
+
     Ok(ImgAndStats {
-        img: result.image,
-        stats_img: Some(result.stats.render(tile_size)),
+        img: image,
+        stats_img,
+        html_generator,
     })
 }
 
