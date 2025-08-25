@@ -99,6 +99,10 @@ struct Mosaic {
     #[clap(long)]
     /// Generate HTML output with interactive tile tooltips showing distance and path
     html: bool,
+
+    #[clap(long)]
+    /// Generate web-compatible HTML with relative URLs for static hosting (S3, etc.)
+    web: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -551,6 +555,7 @@ where
         tiles_dir,
         greedy,
         html,
+        web,
         ..
     } = mosaic_args;
 
@@ -657,8 +662,12 @@ where
     let stats_for_render = stats.clone();
     let stats_img = Some(stats_for_render.render(tile_size));
 
-    let html_generator = if html {
-        eprintln!("📄 HTML output requested - will generate after image save");
+    let html_generator = if html || web {
+        if web {
+            eprintln!("🌐 Web-compatible HTML output requested - will generate after image save");
+        } else {
+            eprintln!("📄 HTML output requested - will generate after image save");
+        }
 
         // Create MosaicConfig for HTML generation
         let mode_str = match mode {
@@ -695,7 +704,7 @@ where
             move |mosaic_path: &std::path::Path,
                   html_path: &std::path::Path|
                   -> Result<(), std::io::Error> {
-                stats_clone.generate_html(mosaic_path, html_path, &tile_set_clone, &config)
+                stats_clone.generate_html_with_options(mosaic_path, html_path, &tile_set_clone, &config, web)
             },
         )
             as Box<

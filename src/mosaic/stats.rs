@@ -64,6 +64,7 @@ where
     }
 
     /// Get the number of tiles recorded in these statistics.
+    #[allow(dead_code)]
     pub fn tile_count(&self) -> usize {
         self.tiles.len()
     }
@@ -187,26 +188,25 @@ where
         image
     }
 
-    /// Generate a standalone HTML widget containing only the mosaic container.
-    ///
-    /// Creates a self-contained HTML document with just the interactive mosaic
-    /// that can be embedded in other pages or used independently.
+    /// Generate a standalone HTML widget with web-compatible URLs for static hosting.
     ///
     /// # Arguments
     /// * `mosaic_image_path` - Path to the generated mosaic JPEG image
     /// * `output_path` - Path where the widget HTML file should be written
     /// * `tile_set` - The tile set used for generating the mosaic
     /// * `config` - Configuration settings used to generate the mosaic
+    /// * `web_compatible` - If true, generates relative URLs suitable for web hosting
     ///
     /// # Returns
     /// * `Ok(())` - If widget HTML file was successfully generated
     /// * `Err(std::io::Error)` - If file writing failed
-    pub fn generate_mosaic_widget<T>(
+    pub fn generate_mosaic_widget_with_options<T>(
         &self,
         mosaic_image_path: &Path,
         output_path: &Path,
         tile_set: &TileSet<T>,
         config: &MosaicConfig,
+        web_compatible: bool,
     ) -> Result<(), std::io::Error> {
         if self.tiles.is_empty() {
             return Err(std::io::Error::new(
@@ -340,17 +340,27 @@ where
             }}
         }}
 
-        function openTileImage(imagePath, cwd) {{
-            // Convert file path to file:// URL for local files
-            let absolutePath;
-            if (imagePath.startsWith('/') || imagePath.match(/^[A-Za-z]:/)) {{
-                absolutePath = imagePath;
+        function openTileImage(imagePath, isWebCompatible) {{
+            if (isWebCompatible) {{
+                // For web hosting, open the relative URL directly
+                console.log('Opening tile image:', imagePath);
+                window.open(imagePath, '_blank');
             }} else {{
-                absolutePath = cwd + '/' + imagePath;
+                // Convert file path to file:// URL for local files
+                let absolutePath;
+                if (imagePath.startsWith('/') || imagePath.match(/^[A-Za-z]:/)) {{
+                    absolutePath = imagePath;
+                }} else {{
+                    // Use current directory as fallback for local files
+                    const cwd = window.location.protocol === 'file:' ?
+                        window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) :
+                        '';
+                    absolutePath = cwd + '/' + imagePath;
+                }}
+                const fileUrl = 'file://' + absolutePath;
+                console.log('Opening tile image:', absolutePath);
+                window.open(fileUrl, '_blank');
             }}
-            const fileUrl = 'file://' + absolutePath;
-            console.log('Opening tile image:', absolutePath);
-            window.open(fileUrl, '_blank');
         }}
 
         // Listen for messages from parent window
@@ -521,50 +531,82 @@ where
                 "distance-good"
             };
 
-            // Escape the path for JavaScript by replacing backslashes and quotes
-            let escaped_path = tile_path
-                .display()
-                .to_string()
-                .replace("\\", "\\\\")
-                .replace("'", "\\'")
-                .replace("\"", "\\\"");
+            // Generate URLs based on web compatibility mode
+            let (click_url, tooltip_image_url, web_compat_flag) = if web_compatible {
+                // For web hosting, preserve directory structure relative to tiles_dir
+                let tiles_dir_path = std::path::Path::new(&config.tiles_dir);
+                let relative_to_tiles_dir =
+                    if let Ok(rel_path) = tile_path.strip_prefix(tiles_dir_path) {
+                        // Successfully stripped the tiles_dir prefix
+                        rel_path.display().to_string()
+                    } else {
+                        // Fallback: if we can't strip prefix, just use filename
+                        tile_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string()
+                    };
 
-            let cwd = std::env::current_dir().unwrap();
-            let escaped_cwd = cwd
-                .display()
-                .to_string()
-                .replace("\\", "\\\\")
-                .replace("'", "\\'")
-                .replace("\"", "\\\"");
-
-            // Create absolute path for the image source
-            let absolute_tile_path = if tile_path.is_absolute() {
-                tile_path.to_path_buf()
+                let web_path = format!("tiles/{}", relative_to_tiles_dir);
+                (web_path.clone(), web_path, "true")
             } else {
-                cwd.join(tile_path)
-            };
+                // For local files, use file:// URLs
+                let escaped_path = tile_path
+                    .display()
+                    .to_string()
+                    .replace("\\", "\\\\")
+                    .replace("'", "\\'")
+                    .replace("\"", "\\\"");
 
-            // Convert to file URL for browser (need to URL encode for safety)
-            let file_url = format!("file://{}", absolute_tile_path.display());
+                let cwd = std::env::current_dir().unwrap();
+                let _escaped_cwd = cwd
+                    .display()
+                    .to_string()
+                    .replace("\\", "\\\\")
+                    .replace("'", "\\'")
+                    .replace("\"", "\\\"");
+
+                // Create absolute path for the image source
+                let absolute_tile_path = if tile_path.is_absolute() {
+                    tile_path.to_path_buf()
+                } else {
+                    cwd.join(tile_path)
+                };
+
+                // Convert to file URL for browser
+                let file_url = format!("file://{}", absolute_tile_path.display());
+                (escaped_path, file_url, "false")
+            };
 
             // Format date information
             let date_info = if let Some(ref date_taken) = tile.date_taken {
-                format!("Date: {}<br/>", date_taken)
+                format!("{}", date_taken)
             } else {
                 String::new()
             };
 
+            let distance_info = if web_compatible {
+                String::new()
+            } else {
+                format!(
+                    r#"<span class = "{}">Distance: {:.3}</span><br/>"#,
+                    distance_class, distance
+                )
+            };
+
             html.push_str(&format!(r#"
-        <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" onclick="openTileImage('{}', '{}')">
+        <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;" onclick="openTileImage('{}', {})">
             <div class="tooltip">
                 <img src="{}" alt="Tile Preview" class="tooltip-image" onerror="this.style.display='none'"/><br/>
-                <span class="{}">Distance: {:.3}</span><br/>
+                {}
                 {}
             </div>
         </div>"#,
-                left_percent, top_percent, width_percent, height_percent, escaped_path, escaped_cwd,
-                file_url,
-                distance_class, distance, date_info
+                left_percent, top_percent, width_percent, height_percent, click_url, web_compat_flag,
+                tooltip_image_url,
+                distance_info,
+                date_info
             ));
         }
 
@@ -584,26 +626,25 @@ where
         Ok(())
     }
 
-    /// Generate an HTML file with the mosaic image and interactive tooltips.
-    ///
-    /// Creates an HTML document embedding the mosaic image with CSS-based tooltips
-    /// that appear on hover, showing tile distance scores and original file paths.
+    /// Generate an HTML file with web-compatible URLs for static hosting.
     ///
     /// # Arguments
     /// * `mosaic_image_path` - Path to the generated mosaic JPEG image
     /// * `output_path` - Path where the HTML file should be written
     /// * `tile_set` - The tile set used for generating the mosaic
     /// * `config` - Configuration settings used to generate the mosaic
+    /// * `web_compatible` - If true, generates relative URLs suitable for web hosting
     ///
     /// # Returns
     /// * `Ok(())` - If HTML file was successfully generated
     /// * `Err(std::io::Error)` - If file writing failed
-    pub fn generate_html<T>(
+    pub fn generate_html_with_options<T>(
         &self,
         mosaic_image_path: &Path,
         output_path: &Path,
         tile_set: &TileSet<T>,
         config: &MosaicConfig,
+        web_compatible: bool,
     ) -> Result<(), std::io::Error> {
         if self.tiles.is_empty() {
             return Err(std::io::Error::new(
@@ -621,7 +662,13 @@ where
                 .to_string_lossy()
         ));
 
-        self.generate_mosaic_widget(mosaic_image_path, &widget_path, tile_set, config)?;
+        self.generate_mosaic_widget_with_options(
+            mosaic_image_path,
+            &widget_path,
+            tile_set,
+            config,
+            web_compatible,
+        )?;
 
         let mut html = String::new();
 
@@ -1138,7 +1185,20 @@ mod tests {
         let output_path = PathBuf::from("/tmp/test_widget.html");
 
         // Should not panic and should create valid HTML
-        let result = stats.generate_mosaic_widget(&mosaic_path, &output_path, &tile_set, &config);
+        let result = {
+            let this = &stats;
+            let mosaic_image_path: &Path = &mosaic_path;
+            let output_path: &Path = &output_path;
+            let tile_set = &tile_set;
+            let config: &MosaicConfig = &config;
+            this.generate_mosaic_widget_with_options(
+                mosaic_image_path,
+                output_path,
+                tile_set,
+                config,
+                false,
+            )
+        };
         assert!(result.is_ok(), "Widget generation should succeed");
     }
 }
