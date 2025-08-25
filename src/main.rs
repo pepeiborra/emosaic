@@ -336,7 +336,7 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    unsafe { backtrace_on_stack_overflow::enable() };
+    // unsafe { backtrace_on_stack_overflow::enable() };
 
     let start_time = Instant::now();
     let memory_monitor = MemoryMonitor::start();
