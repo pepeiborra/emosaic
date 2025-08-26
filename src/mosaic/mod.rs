@@ -6,6 +6,7 @@ pub mod image;
 pub mod rendering;
 pub mod stats;
 pub mod tiles;
+pub mod web;
 
 // Re-export key types and functions for backwards compatibility
 pub use analysis::analyse;
