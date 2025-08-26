@@ -219,8 +219,15 @@ where
     }
 
     /// Generate interactive tile regions with tooltips
-    fn append_tile_regions<T>(&self, html: &mut String, tile_set: &TileSet<T>, config: &MosaicConfig, 
-                             image_width: u32, image_height: u32, web_compatible: bool) {
+    fn append_tile_regions<T>(
+        &self,
+        html: &mut String,
+        tile_set: &TileSet<T>,
+        config: &MosaicConfig,
+        image_width: u32,
+        image_height: u32,
+        web_compatible: bool,
+    ) {
         // Find distance range for color coding
         let distances: Vec<f64> = self.tiles().values().map(|t| t.colors.into()).collect();
         let min_distance = distances.iter().fold(f64::INFINITY, |a, &b| a.min(b));
