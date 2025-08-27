@@ -516,8 +516,6 @@ window.addEventListener('load', function() {
         updateMinZoom();
         initializeMobileZoom();
         positionYearFilter();
-        // Update flag UI after everything is loaded
-        window.flagSystem.updateAllFlagUI();
     }, 100);
     console.log('All features initialized');
 });
@@ -684,10 +682,21 @@ function positionTooltipSmartly(tileRegion) {
     }, 0);
 }
 
-function loadTooltipImage(tileRegion) {
+async function loadTooltipImage(tileRegion) {
     // Don't load tooltip images on mobile devices
     if (isMobile()) {
         return;
+    }
+
+    // Load flag data lazily for desktop tooltips
+    const tileHash = tileRegion.dataset.tileHash;
+    if (tileHash && window.flagSystem) {
+        try {
+            await window.flagSystem.ensureFlagDataLoaded(tileHash);
+            window.flagSystem.updateFlagUI(tileHash);
+        } catch (error) {
+            console.warn('Failed to load flag data for tooltip:', error);
+        }
     }
 
     const img = tileRegion.querySelector('.tooltip-image');
@@ -709,7 +718,7 @@ function handleTileClick(imagePath, isWebCompatible, tileElement, tileImageUrl, 
     }
 }
 
-function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
+async function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
     const modal = document.getElementById('mobile-modal');
     const modalImage = document.getElementById('modal-image');
     const modalInfo = document.getElementById('modal-info');
@@ -726,20 +735,43 @@ function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
     // Base content
     let content = distanceInfo + dateInfo;
 
-    // Add flag UI for mobile
+    // Add flag UI for mobile with lazy loading
     if (tileHash && window.flagSystem) {
-        const isFlagged = window.flagSystem.flaggedTiles.has(tileHash);
+        // Show loading state initially
         content += `
             <div class="mobile-flag-container">
-                <div class="flag-status">${isFlagged ?
-                    '<div style="color: #ff6b6b; margin: 8px 0; font-size: 14px;">⚠️ This image has been flagged</div>' : ''}</div>
-                <button class="flag-button mobile-flag-btn"
+                <div class="flag-status" id="mobile-flag-status-${tileHash}">
+                    <div style="color: #999; margin: 8px 0; font-size: 14px;">Loading flag status...</div>
+                </div>
+                <button class="flag-button mobile-flag-btn" id="mobile-flag-btn-${tileHash}"
                         onclick="window.flagSystem.toggleFlag('${tileHash}', '${tilePath}')"
-                        style="margin-top: 12px; padding: 8px 16px; font-size: 14px;">
-                    ${isFlagged ? '✓ Flagged' : '🚩 Flag for Review'}
+                        style="margin-top: 12px; padding: 8px 16px; font-size: 14px;" disabled>
+                    Loading...
                 </button>
             </div>
         `;
+
+        // Set initial content with loading state
+        modalInfo.innerHTML = content;
+        modal.classList.add('active');
+        document.body.style.overflow = 'hidden';
+
+        // Load flag data lazily and update UI
+        try {
+            await window.flagSystem.ensureFlagDataLoaded(tileHash);
+            window.flagSystem.updateMobileFlagUI(tileHash);
+        } catch (error) {
+            console.warn('Failed to load flag data for mobile modal:', error);
+            // Update UI to show error state or fallback
+            const statusDiv = document.getElementById(`mobile-flag-status-${tileHash}`);
+            const button = document.getElementById(`mobile-flag-btn-${tileHash}`);
+            if (statusDiv) statusDiv.innerHTML = '';
+            if (button) {
+                button.textContent = '🚩 Flag for Review';
+                button.disabled = false;
+            }
+        }
+        return; // Early return since we've already set up the modal
     }
 
     modalInfo.innerHTML = content;
@@ -846,78 +878,130 @@ class TileFlagSystem {
     constructor() {
         // API endpoint - will be set after deployment
         this.apiBase = 'https://lm86ri8yyk.execute-api.us-east-1.amazonaws.com/prod';
-        this.flaggedTiles = new Map(); // tileHash -> flagData
+        this.flaggedTiles = new Map(); // tileHash -> cached flagData with TTL
+        this.pendingRequests = new Map(); // Track in-flight requests
         this.rateLimiter = new RateLimiter();
         this.useLocalStorage = false; // Phase 2: use real API
         this.fallbackToLocalStorage = true; // Fallback if API fails
+        this.CACHE_TTL = 10 * 1000; // 10 seconds TTL for real-time behavior
 
-        // Load initial flags
-        this.loadFlags();
+        // Check for localStorage migration but don't load all flags upfront
+        this.handleInitialSetup();
     }
 
-    async loadFlags() {
-        // Try to load from API first, fallback to localStorage
+    async handleInitialSetup() {
+        // Only check for localStorage migration, don't load all flags upfront
         if (!this.useLocalStorage) {
             try {
-                await this.loadFromAPI();
-                // After successful API load, check for localStorage migration
+                // If API works, check for localStorage migration
                 await this.migrateFromLocalStorageIfNeeded();
                 return;
             } catch (error) {
-                console.warn('Failed to load flags from API, falling back to localStorage:', error);
+                console.warn('API not available, falling back to localStorage:', error);
                 if (this.fallbackToLocalStorage) {
                     this.useLocalStorage = true;
+                    this.loadFromLocalStorage();
                 }
+            }
+        } else {
+            // Load from localStorage (fallback mode)
+            this.loadFromLocalStorage();
+        }
+    }
+
+    setCachedFlag(tileHash, flagData) {
+        const now = Date.now();
+        this.flaggedTiles.set(tileHash, {
+            data: flagData,
+            timestamp: now,
+            expires: now + this.CACHE_TTL
+        });
+    }
+
+    getCachedFlag(tileHash) {
+        const entry = this.flaggedTiles.get(tileHash);
+        if (!entry) return null;
+
+        // Check if cache is still valid
+        if (Date.now() >= entry.expires) {
+            this.flaggedTiles.delete(tileHash);
+            return null;
+        }
+
+        return entry.data;
+    }
+
+    isCacheValid(tileHash) {
+        const entry = this.flaggedTiles.get(tileHash);
+        if (!entry) return false;
+        return Date.now() < entry.expires;
+    }
+
+    async ensureFlagDataLoaded(tileHash, forceRefresh = false) {
+        // Return cached data if valid and not forcing refresh
+        if (!forceRefresh) {
+            const cachedData = this.getCachedFlag(tileHash);
+            if (cachedData !== null) {
+                return cachedData;
             }
         }
 
-        // Load from localStorage (fallback or Phase 1)
-        this.loadFromLocalStorage();
+        // Return pending request if in flight
+        if (this.pendingRequests.has(tileHash)) {
+            return await this.pendingRequests.get(tileHash);
+        }
+
+        // Fetch individual tile flag
+        const promise = this.fetchSingleFlag(tileHash);
+        this.pendingRequests.set(tileHash, promise);
+
+        try {
+            const flagData = await promise;
+            this.setCachedFlag(tileHash, flagData || null);
+            return flagData;
+        } finally {
+            this.pendingRequests.delete(tileHash);
+        }
     }
 
-    async loadFromAPI() {
-        // Get all tile hashes currently on the page
-        const tileElements = document.querySelectorAll('[data-tile-hash]');
-        const tileHashes = Array.from(tileElements).map(el => el.dataset.tileHash).filter(Boolean);
-
-        if (tileHashes.length === 0) {
-            console.log('No tiles found on page');
-            return;
+    async fetchSingleFlag(tileHash) {
+        if (this.useLocalStorage) {
+            // In localStorage mode, check what we have locally
+            const entry = this.flaggedTiles.get(tileHash);
+            return entry?.data || null;
         }
 
-        const response = await fetch(`${this.apiBase}/tiles/flags`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ tileHashes })
-        });
-
-        if (!response.ok) {
-            throw new Error(`API response not ok: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        // Convert API response to our internal format
-        this.flaggedTiles.clear();
-        Object.entries(data.flags || {}).forEach(([tileHash, flagInfo]) => {
-            this.flaggedTiles.set(tileHash, {
-                tilePath: flagInfo.tilePath,
-                flaggedAt: flagInfo.flaggedAt,
-                flaggedBy: 'anonymous'
+        try {
+            // Use existing bulk API but with single tile
+            const response = await fetch(`${this.apiBase}/tiles/flags`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tileHashes: [tileHash] })
             });
-        });
 
-        console.log('Loaded', this.flaggedTiles.size, 'flags from API');
+            if (!response.ok) {
+                console.warn(`Failed to fetch flag for ${tileHash}: ${response.status}`);
+                return null;
+            }
+
+            const data = await response.json();
+            return data.flags?.[tileHash] || null;
+        } catch (error) {
+            console.warn(`Error fetching flag for ${tileHash}:`, error);
+            return null;
+        }
     }
+
 
     loadFromLocalStorage() {
         try {
             const stored = localStorage.getItem('mosaic-flags');
             if (stored) {
                 const data = JSON.parse(stored);
-                this.flaggedTiles = new Map(Object.entries(data));
+                // Convert old format to TTL cache format
+                Object.entries(data).forEach(([tileHash, flagData]) => {
+                    this.setCachedFlag(tileHash, flagData);
+                });
                 console.log('Loaded', this.flaggedTiles.size, 'flags from localStorage');
             }
         } catch (error) {
@@ -927,7 +1011,13 @@ class TileFlagSystem {
 
     saveToLocalStorage() {
         try {
-            const data = Object.fromEntries(this.flaggedTiles);
+            // Extract only the data part from TTL cache entries
+            const data = {};
+            this.flaggedTiles.forEach((cacheEntry, tileHash) => {
+                if (cacheEntry.data && Date.now() < cacheEntry.expires) {
+                    data[tileHash] = cacheEntry.data;
+                }
+            });
             localStorage.setItem('mosaic-flags', JSON.stringify(data));
         } catch (error) {
             console.warn('Failed to save flags to localStorage:', error);
@@ -1025,7 +1115,8 @@ class TileFlagSystem {
     }
 
     async toggleFlag(tileHash, tilePath) {
-        const isFlagged = this.flaggedTiles.has(tileHash);
+        const cachedFlag = this.getCachedFlag(tileHash);
+        const isFlagged = cachedFlag !== null;
 
         if (!isFlagged) {
             // Flagging a tile
@@ -1042,13 +1133,14 @@ class TileFlagSystem {
             }
 
             if (success || this.useLocalStorage) {
-                // Update local state
+                // Update local state immediately
                 this.rateLimiter.consume();
-                this.flaggedTiles.set(tileHash, {
+                const flagData = {
                     tilePath: tilePath,
                     flaggedAt: new Date().toISOString(),
                     flaggedBy: 'anonymous'
-                });
+                };
+                this.setCachedFlag(tileHash, flagData);
 
                 if (this.useLocalStorage) {
                     this.saveToLocalStorage();
@@ -1068,6 +1160,7 @@ class TileFlagSystem {
             }
 
             if (success || this.useLocalStorage) {
+                // Remove from cache immediately
                 this.flaggedTiles.delete(tileHash);
 
                 if (this.useLocalStorage) {
@@ -1121,7 +1214,8 @@ class TileFlagSystem {
     }
 
     updateFlagUI(tileHash) {
-        const isFlagged = this.flaggedTiles.has(tileHash);
+        const cachedFlag = this.getCachedFlag(tileHash);
+        const isFlagged = cachedFlag !== null;
 
         // Update desktop tooltip
         const flagStatus = document.getElementById(`flag-status-${tileHash}`);
@@ -1143,7 +1237,8 @@ class TileFlagSystem {
     updateMobileFlagUI(tileHash) {
         // Update mobile modal if it's currently showing this tile
         if (window.currentMobileTileHash === tileHash) {
-            const isFlagged = this.flaggedTiles.has(tileHash);
+            const cachedFlag = this.getCachedFlag(tileHash);
+            const isFlagged = cachedFlag !== null;
             const modalInfo = document.getElementById('modal-info');
 
             if (modalInfo) {
@@ -1159,7 +1254,7 @@ class TileFlagSystem {
                     <div class="flag-status">${isFlagged ?
                         '<div style="color: #ff6b6b; margin: 8px 0;">⚠️ This image has been flagged</div>' : ''}</div>
                     <button class="flag-button mobile-flag-btn"
-                            onclick="window.flagSystem.toggleFlag('${tileHash}', '${this.flaggedTiles.get(tileHash)?.tilePath || ''}')">
+                            onclick="window.flagSystem.toggleFlag('${tileHash}', '${cachedFlag?.tilePath || ''}')">
                         ${isFlagged ? '✓ Flagged' : '🚩 Flag for Review'}
                     </button>
                 `;
