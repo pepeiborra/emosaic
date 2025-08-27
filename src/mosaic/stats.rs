@@ -17,6 +17,7 @@ pub struct MosaicConfig {
     pub downsample: u32,
     pub randomize: Option<f64>,
     pub tiles_dir: String,
+    pub title: String,
 }
 
 /// Statistics collector for mosaic rendering operations.

@@ -63,7 +63,7 @@ where
 
         // Copy JavaScript file to output directory and generate HTML header
         self.copy_assets_to_output_dir(output_path)?;
-        self.append_widget_header(&mut html, mosaic_image_path, min_year, max_year);
+        self.append_widget_header(&mut html, mosaic_image_path, min_year, max_year, &config.title);
 
         // Calculate image dimensions and tile positions
         let max_x = self.tiles().keys().map(|(x, _)| *x).max().unwrap_or(0);
@@ -130,6 +130,7 @@ where
         mosaic_image_path: &Path,
         min_year: i32,
         max_year: i32,
+        title: &str,
     ) {
         // Generate cache-busting timestamp
         let timestamp = std::time::SystemTime::now()
@@ -146,9 +147,9 @@ where
     <!-- Web App Meta Tags for Safari iOS -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Mosaic Widget">
+    <meta name="apple-mobile-web-app-title" content="{title}">
     <meta name="mobile-web-app-capable" content="yes">
-    <title>Mosaic Widget</title>
+    <title>{title}</title>
     <link rel="stylesheet" href="mosaic-widget.css?v={timestamp}">
     <script>
         // Initialize template variables for the JavaScript
@@ -169,7 +170,8 @@ where
                 .to_string_lossy(),
             min_year = min_year,
             max_year = max_year,
-            timestamp = timestamp
+            timestamp = timestamp,
+            title = title
         ));
     }
 

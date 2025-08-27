@@ -103,6 +103,10 @@ struct Mosaic {
     #[clap(long)]
     /// Generate web-compatible HTML with relative URLs for static hosting (S3, etc.)
     web: bool,
+
+    #[clap(long, default_value = "Mosaic Widget")]
+    /// Title for the generated HTML page
+    title: String,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -556,6 +560,7 @@ where
         greedy,
         html,
         web,
+        title,
         ..
     } = mosaic_args;
 
@@ -695,6 +700,7 @@ where
             downsample: downsample.into(),
             randomize,
             tiles_dir: tiles_dir.display().to_string(),
+            title: title.clone(),
         };
 
         // Clone the necessary data for the closure

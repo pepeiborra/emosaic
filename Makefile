@@ -16,6 +16,7 @@ CROP ?= 1
 FORCE ?= 0
 TILES_DIR ?= /Users/pepe/Library/Mobile Documents/com~apple~CloudDocs/Fotos campo
 S3_BUCKET ?= casadelmanco.com
+TITLE ?= Casa del Manco
 TIMESTAMP := $(shell date +%Y%m%d%H%M%S)
 DOWNSAMPLE=1
 
@@ -70,6 +71,7 @@ generate: $(INPUT_JPG)
 		--extensions jpeg \
 		--extensions JPG \
 		--extensions JPEG \
+		--title "$(TITLE)" \
 		$(FORCE_FLAG) \
 		--web
 
@@ -108,11 +110,13 @@ help:
 	@echo "  CROP       Enable cropping 1/0 (default: 1)"
 	@echo "  TILES_DIR  Tile images directory"
 	@echo "  S3_BUCKET  S3 bucket name (default: casadelmanco.com)"
+	@echo "  TITLE      HTML page title (default: Casa del Manco)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make upload                    # Use defaults (marco2)"
 	@echo "  make upload FILE=photo1        # Custom file"
 	@echo "  make upload TILE_SIZE=16       # Custom tile size"
 	@echo "  make upload FILE=test CROP=0   # Multiple overrides"
+	@echo "  make upload TITLE='My Mosaic'  # Custom title"
 	@echo "  make generate FILE=test        # Generate only, no upload"
 	@echo "  make clean FILE=marco2         # Clean marco2 files"
