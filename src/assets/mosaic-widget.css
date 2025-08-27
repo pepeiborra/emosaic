@@ -26,12 +26,17 @@ body {
 }
 .mosaic-image {
     display: block;
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
     pointer-events: none; /* Prevent image drag on touch devices */
+}
+
+/* Desktop: use max-width/max-height for contained sizing */
+@media (min-width: 769px) and (hover: hover) {
+    .mosaic-image {
+        max-width: 100%;
+        max-height: 100%;
+        width: auto;
+        height: auto;
+    }
 }
 .tile-region {
     position: absolute;

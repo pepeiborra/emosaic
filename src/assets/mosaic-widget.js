@@ -14,7 +14,7 @@ let lastTouchCenter = { x: 0, y: 0 };
 let isPanning = false;
 let isZooming = false;
 let wasZooming = false;
-const minZoom = 0.5;
+let minZoom = 0.5; // Will be updated based on image fit
 const maxZoom = 5;
 
 // Touch handling for zoom and pan
@@ -31,7 +31,131 @@ function getTouchCenter(touch1, touch2) {
     };
 }
 
+function calculateMinZoom() {
+    const image = document.querySelector('.mosaic-image');
+    const container = document.querySelector('.mosaic-container');
+
+    console.log('calculateMinZoom called');
+
+    if (!isMobile()) {
+        return 0.1; // Very low value for desktop, effectively no limit
+    }
+
+    if (!image || !container) {
+        return 0.5;
+    }
+
+    if (image.naturalWidth === 0 || image.naturalHeight === 0) {
+        return 0.5;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+
+    console.log('Container dimensions:', containerRect.width, 'x', containerRect.height);
+
+    // On mobile, image renders at 1:1 scale (natural size)
+    // Calculate what zoom would make the image fit entirely in the container
+    const scaleToFitWidth = containerRect.width / image.naturalWidth;
+    const scaleToFitHeight = containerRect.height / image.naturalHeight;
+
+    // The minimum zoom is the smaller scale (fits both dimensions)
+    const scaleToFit = Math.min(scaleToFitWidth, scaleToFitHeight);
+
+    // Add small buffer to ensure image fits completely, but don't exceed 1.0
+    const minZoomValue = Math.min(scaleToFit * 0.95, 1);
+
+    return minZoomValue;
+}
+
+function updateMinZoom() {
+
+    const newMinZoom = calculateMinZoom();
+    const oldMinZoom = minZoom;
+    minZoom = newMinZoom;
+
+    // If current zoom is below new minimum, adjust it
+    if (currentZoom < minZoom) {
+        currentZoom = minZoom;
+        applyTransform(true);
+    }
+}
+
+function initializeMobileZoom() {
+    if (isMobile()) {
+        console.log('Mobile detected - initializing at minimum zoom');
+        updateMinZoom();
+        currentZoom = minZoom;
+        // Reset pan to center when initializing
+        currentPanX = 0;
+        currentPanY = 0;
+        applyTransform(false);
+        console.log('Mobile zoom initialized to:', currentZoom);
+    }
+}
+
+function constrainPan() {
+    if (!isMobile()) {
+        console.log('Desktop: no pan constraints');
+        return;
+    }
+    
+    const image = document.querySelector('.mosaic-image');
+    const container = document.querySelector('.mosaic-container');
+    
+    if (!image || !container || image.naturalWidth === 0 || image.naturalHeight === 0) {
+        return;
+    }
+    
+    const containerRect = container.getBoundingClientRect();
+    
+    // Calculate the current scaled image dimensions
+    const scaledImageWidth = image.naturalWidth * currentZoom;
+    const scaledImageHeight = image.naturalHeight * currentZoom;
+    
+    console.log('Pan constraint - Container:', containerRect.width, 'x', containerRect.height);
+    console.log('Pan constraint - Scaled image:', scaledImageWidth, 'x', scaledImageHeight);
+    
+    let constrainedPanX = currentPanX;
+    let constrainedPanY = currentPanY;
+    
+    // Constrain horizontal pan
+    if (scaledImageWidth > containerRect.width) {
+        // Image is wider than container - constrain to keep image filling screen
+        const maxPanX = (scaledImageWidth - containerRect.width) / 2;
+        const minPanX = -maxPanX;
+        constrainedPanX = Math.min(maxPanX, Math.max(minPanX, currentPanX));
+        console.log('Horizontal constraint - Min:', minPanX, 'Max:', maxPanX, 'Current:', currentPanX, 'Constrained:', constrainedPanX);
+    } else {
+        // Image is narrower than container - center it
+        constrainedPanX = 0;
+        console.log('Image narrower than container - centering horizontally');
+    }
+    
+    // Constrain vertical pan
+    if (scaledImageHeight > containerRect.height) {
+        // Image is taller than container - constrain to keep image filling screen
+        const maxPanY = (scaledImageHeight - containerRect.height) / 2;
+        const minPanY = -maxPanY;
+        constrainedPanY = Math.min(maxPanY, Math.max(minPanY, currentPanY));
+        console.log('Vertical constraint - Min:', minPanY, 'Max:', maxPanY, 'Current:', currentPanY, 'Constrained:', constrainedPanY);
+    } else {
+        // Image is shorter than container - center it
+        constrainedPanY = 0;
+        console.log('Image shorter than container - centering vertically');
+    }
+    
+    // Update pan values if they were constrained
+    if (constrainedPanX !== currentPanX || constrainedPanY !== currentPanY) {
+        console.log('Pan constrained from:', currentPanX, currentPanY, 'to:', constrainedPanX, constrainedPanY);
+        currentPanX = constrainedPanX;
+        currentPanY = constrainedPanY;
+    }
+}
+
 function applyTransform(smooth = false) {
+    // Apply pan constraints before transform on mobile
+    constrainPan();
+    
     const zoomContainer = document.querySelector('.zoom-container');
     if (zoomContainer) {
         // Add or remove smooth transition class
@@ -152,7 +276,16 @@ function handleTouchMove(e) {
         // Calculate zoom
         if (lastTouchDistance > 0) {
             const zoomDelta = touchDistance / lastTouchDistance;
-            const newZoom = Math.min(maxZoom, Math.max(minZoom, currentZoom * zoomDelta));
+            const proposedZoom = currentZoom * zoomDelta;
+
+            let newZoom;
+            if (isMobile()) {
+                // Mobile: enforce both min and max zoom
+                newZoom = Math.min(maxZoom, Math.max(minZoom, proposedZoom));
+            } else {
+                // Desktop: only enforce max zoom, no minimum
+                newZoom = Math.min(maxZoom, proposedZoom);
+            }
 
             // Zoom towards the center of the pinch
             const container = document.querySelector('.mosaic-container');
@@ -311,12 +444,18 @@ window.addEventListener('load', function() {
     setupModalEvents();
     setupYearFilter();
     setupTouchHandlers();
-    // Position year filter after everything is loaded
-    setTimeout(() => positionYearFilter(), 100);
+    // Update minimum zoom after everything is loaded
+    setTimeout(() => {
+        updateMinZoom();
+        initializeMobileZoom();
+        positionYearFilter();
+    }, 100);
     console.log('All features initialized');
 });
 window.addEventListener('resize', function() {
     adjustMosaicLayout();
+    // Update minimum zoom after resize
+    updateMinZoom();
     // Preserve zoom state after layout adjustment
     if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
         setTimeout(() => applyTransform(false), 10);
@@ -331,8 +470,13 @@ function handleOrientationChange() {
     clearTimeout(orientationChangeTimeout);
     orientationChangeTimeout = setTimeout(() => {
         console.log('Orientation changed, adjusting layout...');
-        // Preserve zoom state after orientation change
-        if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
+        adjustMosaicLayout();
+        // Update minimum zoom after orientation change
+        updateMinZoom();
+        // On mobile, reinitialize to minimum zoom after orientation change
+        initializeMobileZoom();
+        // Preserve zoom state after orientation change (only for desktop)
+        if (!isMobile() && (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0)) {
             setTimeout(() => applyTransform(false), 50);
         }
         // Reposition year filter after orientation change with additional delay
@@ -518,3 +662,7 @@ window.setupTouchHandlers = setupTouchHandlers;
 window.setupYearFilterTouchHandlers = setupYearFilterTouchHandlers;
 window.positionYearFilter = positionYearFilter;
 window.resetZoom = resetZoom;
+window.calculateMinZoom = calculateMinZoom;
+window.updateMinZoom = updateMinZoom;
+window.initializeMobileZoom = initializeMobileZoom;
+window.constrainPan = constrainPan;
