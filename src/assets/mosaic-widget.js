@@ -5,6 +5,36 @@ function isMobile() {
            (navigator.maxTouchPoints > 0);
 }
 
+// Attempt to hide Safari toolbar on iOS
+function attemptHideIOSToolbar() {
+    if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+        console.log('iOS detected - attempting to hide Safari toolbar');
+        
+        // Method 1: Scroll trick to hide address bar
+        setTimeout(() => {
+            window.scrollTo(0, 1);
+        }, 100);
+        
+        // Method 2: Request fullscreen if supported
+        if (document.documentElement.requestFullscreen) {
+            document.addEventListener('touchstart', function requestFullscreen() {
+                document.documentElement.requestFullscreen().catch(() => {
+                    console.log('Fullscreen request failed or not supported');
+                });
+                document.removeEventListener('touchstart', requestFullscreen);
+            }, { once: true });
+        }
+        
+        // Method 3: Detect if running as web app (added to home screen)
+        if (window.navigator.standalone) {
+            console.log('Running as standalone web app - toolbar already hidden');
+        } else {
+            console.log('Running in Safari browser - toolbar may be visible');
+            console.log('Tip: Add to Home Screen for full-screen experience');
+        }
+    }
+}
+
 // Zoom and pan state
 let currentZoom = 1;
 let currentPanX = 0;
@@ -440,6 +470,7 @@ function adjustMosaicLayout() {
 // Adjust layout when image loads and on window resize
 window.addEventListener('load', function() {
     console.log('Window loaded, initializing features...');
+    attemptHideIOSToolbar();
     adjustMosaicLayout();
     setupModalEvents();
     setupYearFilter();
@@ -666,3 +697,4 @@ window.calculateMinZoom = calculateMinZoom;
 window.updateMinZoom = updateMinZoom;
 window.initializeMobileZoom = initializeMobileZoom;
 window.constrainPan = constrainPan;
+window.attemptHideIOSToolbar = attemptHideIOSToolbar;
