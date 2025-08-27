@@ -59,11 +59,29 @@ function positionYearFilter() {
     const image = document.querySelector('.mosaic-image');
     const container = document.querySelector('.mosaic-container');
     
-    if (!yearFilter || !image || !container) return;
+    if (!yearFilter || !image || !container) {
+        console.log('Year filter positioning skipped - missing elements');
+        return;
+    }
+    
+    // Wait for image to be fully loaded and rendered
+    if (image.naturalWidth === 0 || image.naturalHeight === 0) {
+        console.log('Year filter positioning skipped - image not loaded');
+        setTimeout(() => positionYearFilter(), 50);
+        return;
+    }
     
     // Get the actual rendered position and size of the image
     const imageRect = image.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
+    
+    // Ensure we have valid dimensions
+    if (imageRect.width === 0 || imageRect.height === 0 || 
+        containerRect.width === 0 || containerRect.height === 0) {
+        console.log('Year filter positioning skipped - invalid dimensions');
+        setTimeout(() => positionYearFilter(), 50);
+        return;
+    }
     
     // Calculate position relative to container
     const rightOffset = 10; // pixels from right edge of image
@@ -75,6 +93,19 @@ function positionYearFilter() {
     
     yearFilter.style.left = Math.max(0, left) + 'px';
     yearFilter.style.top = Math.max(0, top) + 'px';
+    
+    // Check if year filter would be outside the visible screen area
+    const yearFilterRect = yearFilter.getBoundingClientRect();
+    const screenWidth = window.innerWidth;
+    const screenHeight = window.innerHeight;
+    
+    // Hide if completely outside screen bounds
+    if (yearFilterRect.right < 0 || yearFilterRect.left > screenWidth ||
+        yearFilterRect.bottom < 0 || yearFilterRect.top > screenHeight) {
+        yearFilter.style.display = 'none';
+    } else {
+        yearFilter.style.display = '';
+    }
 }
 
 function resetZoom() {
@@ -324,6 +355,32 @@ window.addEventListener('resize', function() {
     // Reposition year filter after resize
     setTimeout(() => positionYearFilter(), 10);
 });
+
+// Debounced orientation change handler
+let orientationChangeTimeout;
+function handleOrientationChange() {
+    clearTimeout(orientationChangeTimeout);
+    orientationChangeTimeout = setTimeout(() => {
+        console.log('Orientation changed, adjusting layout...');
+        adjustMosaicLayout();
+        // Preserve zoom state after orientation change
+        if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
+            setTimeout(() => applyTransform(false), 50);
+        }
+        // Reposition year filter after orientation change with additional delay
+        setTimeout(() => positionYearFilter(), 100);
+        // Additional positioning attempt for stubborn cases
+        setTimeout(() => positionYearFilter(), 300);
+    }, 150);
+}
+
+// Handle orientation changes specifically
+window.addEventListener('orientationchange', handleOrientationChange);
+
+// Also listen for screen.orientation changes (modern browsers)
+if (screen && screen.orientation) {
+    screen.orientation.addEventListener('change', handleOrientationChange);
+}
 
 function setupTouchHandlers() {
     const container = document.querySelector('.mosaic-container');
