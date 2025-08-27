@@ -226,6 +226,91 @@ aws dynamodb scan --table-name prod-tile-flags --region us-east-1 --max-items 10
 - **API Gateway**: Free tier covers first 1M requests
 - **Estimated cost**: $2-10/month for moderate usage
 
+## 🛠️ CLI Management Tool
+
+A Python CLI tool is provided for managing flagged tiles directly from the command line.
+
+### Installation
+
+```bash
+cd aws-backend
+pip install -r requirements.txt
+```
+
+### Usage
+
+```bash
+# List all flagged tiles (default: 100 items)
+python tile_manager.py list
+
+# List with custom limit and output format
+python tile_manager.py list --limit 50 --format json
+
+# List with pagination (use nextKey from previous response)
+python tile_manager.py list --next-key "eyJ0aWxlX2hhc2giOiAiYWJjMTIzIn0="
+
+# Delete specific tiles (with confirmation)
+python tile_manager.py delete abc123 def456 ghi789
+
+# Delete tiles without confirmation prompt
+python tile_manager.py delete abc123 --confirm
+
+# Interactive review of flagged tiles
+python tile_manager.py review
+
+# Review with custom batch size
+python tile_manager.py review --batch-size 20
+
+# Use different environment or region
+python tile_manager.py --environment staging --region us-west-2 list
+```
+
+### Commands
+
+#### `list` - List Flagged Tiles
+- `--limit, -l`: Number of items to return (max 1000, default 100)
+- `--next-key, -n`: Pagination token for next page
+- `--format, -f`: Output format (`table` or `json`, default table)
+
+#### `review` - Interactive Review
+Interactively review flagged tiles one by one with options to:
+- **Open**: View the image file in your default image viewer
+- **Unflag**: Remove the tile from the flagged list (keeps the file)
+- **Delete**: Delete the image file from disk (also unflags it)
+- **Continue**: Skip to the next tile
+- **Quit**: Exit the review session
+
+Options:
+- `--batch-size, -b`: Number of tiles to fetch per batch (default 50)
+
+#### `delete` - Delete Flagged Tiles  
+- `tile_hashes`: One or more tile hashes to delete
+- `--confirm, -y`: Skip confirmation prompt
+
+### Global Options
+- `--environment, -e`: Environment name (default: prod)
+- `--region, -r`: AWS region (default: us-east-1)
+
+### Example Output
+
+```bash
+$ python tile_manager.py list --limit 5
+
+📊 Summary:
+  Total flags: 3
+  Today: 1
+  This week: 2
+  Retrieved at: 2025-08-27T10:30:00Z
+
+🏷️  Flagged Tiles (showing 3 of 3 scanned):
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Tile Hash            Flagged At                Tile Path                                                     Status    
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+abc123               2025-08-27T09:01:50       /tiles/2019/tile_001.jpg                                     flagged   
+def456               2025-08-26T15:30:25       /tiles/2020/tile_002.jpg                                     flagged   
+ghi789               2025-08-25T12:15:10       /tiles/2021/tile_003.jpg                                     flagged   
+```
+
 ## 🧹 Cleanup
 
 ```bash
