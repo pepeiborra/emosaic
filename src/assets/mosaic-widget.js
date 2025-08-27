@@ -43,7 +43,7 @@ function applyTransform(smooth = false) {
         const transformValue = `translate(${currentPanX}px, ${currentPanY}px) scale(${currentZoom})`;
         console.log('Applying transform:', transformValue, 'smooth:', smooth);
         zoomContainer.style.transform = transformValue;
-        
+
         // Update CSS variable to counteract zoom for year filter
         updateYearFilterScale();
     }
@@ -58,47 +58,47 @@ function positionYearFilter() {
     const yearFilter = document.querySelector('.year-filter-container.image-positioned');
     const image = document.querySelector('.mosaic-image');
     const container = document.querySelector('.mosaic-container');
-    
+
     if (!yearFilter || !image || !container) {
         console.log('Year filter positioning skipped - missing elements');
         return;
     }
-    
+
     // Wait for image to be fully loaded and rendered
     if (image.naturalWidth === 0 || image.naturalHeight === 0) {
         console.log('Year filter positioning skipped - image not loaded');
         setTimeout(() => positionYearFilter(), 50);
         return;
     }
-    
+
     // Get the actual rendered position and size of the image
     const imageRect = image.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
-    
+
     // Ensure we have valid dimensions
-    if (imageRect.width === 0 || imageRect.height === 0 || 
+    if (imageRect.width === 0 || imageRect.height === 0 ||
         containerRect.width === 0 || containerRect.height === 0) {
         console.log('Year filter positioning skipped - invalid dimensions');
         setTimeout(() => positionYearFilter(), 50);
         return;
     }
-    
+
     // Calculate position relative to container
     const rightOffset = 10; // pixels from right edge of image
     const bottomOffset = 10; // pixels from bottom edge of image
-    
+
     // Position at bottom-right of the visible image
     const left = (imageRect.right - containerRect.left) - yearFilter.offsetWidth - rightOffset;
     const top = (imageRect.bottom - containerRect.top) - yearFilter.offsetHeight - bottomOffset;
-    
+
     yearFilter.style.left = Math.max(0, left) + 'px';
     yearFilter.style.top = Math.max(0, top) + 'px';
-    
+
     // Check if year filter would be outside the visible screen area
     const yearFilterRect = yearFilter.getBoundingClientRect();
     const screenWidth = window.innerWidth;
     const screenHeight = window.innerHeight;
-    
+
     // Hide if completely outside screen bounds
     if (yearFilterRect.right < 0 || yearFilterRect.left > screenWidth ||
         yearFilterRect.bottom < 0 || yearFilterRect.top > screenHeight) {
@@ -136,47 +136,47 @@ function handleTouchMove(e) {
         const touch = e.touches[0];
         const deltaX = touch.clientX - lastTouchCenter.x;
         const deltaY = touch.clientY - lastTouchCenter.y;
-        
+
         currentPanX += deltaX;
         currentPanY += deltaY;
-        
+
         lastTouchCenter = { x: touch.clientX, y: touch.clientY };
         applyTransform(false); // No transition during active pan
     } else if (e.touches.length === 2 && isZooming) {
         // Two touch zoom and pan
         e.preventDefault();
-        
+
         const touchDistance = getTouchDistance(e.touches[0], e.touches[1]);
         const touchCenter = getTouchCenter(e.touches[0], e.touches[1]);
-        
+
         // Calculate zoom
         if (lastTouchDistance > 0) {
             const zoomDelta = touchDistance / lastTouchDistance;
             const newZoom = Math.min(maxZoom, Math.max(minZoom, currentZoom * zoomDelta));
-            
+
             // Zoom towards the center of the pinch
             const container = document.querySelector('.mosaic-container');
             const containerRect = container.getBoundingClientRect();
             const centerX = containerRect.width / 2;
             const centerY = containerRect.height / 2;
-            
+
             // Calculate the point we're zooming towards relative to container center
             const zoomPointX = touchCenter.x - containerRect.left - centerX;
             const zoomPointY = touchCenter.y - containerRect.top - centerY;
-            
+
             // Adjust pan to zoom towards the pinch point
             const zoomRatio = newZoom / currentZoom;
             currentPanX = zoomPointX + (currentPanX - zoomPointX) * zoomRatio;
             currentPanY = zoomPointY + (currentPanY - zoomPointY) * zoomRatio;
-            
+
             // Mark that we're actively zooming if there's significant change
             if (Math.abs(zoomDelta - 1) > 0.02) {
                 wasZooming = true;
             }
-            
+
             currentZoom = newZoom;
         }
-        
+
         // Update for next iteration
         lastTouchDistance = touchDistance;
         lastTouchCenter = touchCenter;
@@ -191,16 +191,16 @@ function handleTouchEnd(e) {
         isPanning = false;
         isZooming = false;
         lastTouchDistance = 0;
-        
+
         console.log('All touches released, preserving zoom state:', currentZoom);
         // Ensure the final transform is applied without resetting
         applyTransform(false);
-        
+
         // Set a flag to prevent any automatic resets
         setTimeout(() => {
             console.log('Zoom state after timeout:', currentZoom, 'transform:', document.querySelector('.zoom-container').style.transform);
         }, 100);
-        
+
         // Clear wasZooming after delay
         setTimeout(() => { wasZooming = false; }, 1000);
     } else if (e.touches.length === 1) {
@@ -257,9 +257,6 @@ window.addEventListener('message', function(event) {
     }
 });
 
-// Store original percentage values to avoid conversion errors
-let originalPositions = new Map();
-
 // Adjust positioning when image loads or window resizes
 function adjustMosaicLayout() {
     const image = document.querySelector('.mosaic-image');
@@ -270,7 +267,7 @@ function adjustMosaicLayout() {
     const overlayTiles = document.querySelectorAll('.distance-overlay-tile');
 
     if (!image || !container || !zoomContainer) return;
-    
+
     // Store current zoom state to preserve it
     const currentTransform = zoomContainer.style.transform;
     console.log('adjustMosaicLayout called, current transform:', currentTransform, 'zoom state:', currentZoom);
@@ -291,39 +288,11 @@ function adjustMosaicLayout() {
         overlay.style.height = imageRect.height + 'px';
     }
 
-    // Store original percentage values on first run (only for tile regions, not overlay tiles)
-    if (originalPositions.size === 0) {
-        [...tileRegions].forEach(element => {
-            const leftPercent = parseFloat(element.style.left) || 0;
-            const topPercent = parseFloat(element.style.top) || 0;
-            const widthPercent = parseFloat(element.style.width) || 0;
-            const heightPercent = parseFloat(element.style.height) || 0;
-
-            originalPositions.set(element, {
-                left: leftPercent,
-                top: topPercent,
-                width: widthPercent,
-                height: heightPercent
-            });
-        });
-    }
-
-    // Update tile regions positioning using stored percentages (convert to pixels relative to image)
-    [...tileRegions].forEach(element => {
-        const original = originalPositions.get(element);
-        if (!original) return;
-
-        // Convert percentages to actual pixels relative to image
-        element.style.left = offsetX + (original.left / 100) * imageRect.width + 'px';
-        element.style.top = offsetY + (original.top / 100) * imageRect.height + 'px';
-        element.style.width = (original.width / 100) * imageRect.width + 'px';
-        element.style.height = (original.height / 100) * imageRect.height + 'px';
-    });
 
     // Distance overlay tiles should keep their percentage positioning relative to the overlay container
     // Since the overlay container is already positioned and sized to match the image,
     // the tiles inside should maintain their original percentage positions
-    
+
     // Restore zoom state if it was modified
     if (currentTransform && currentTransform !== zoomContainer.style.transform) {
         console.log('Restoring transform after layout adjustment');
@@ -362,7 +331,6 @@ function handleOrientationChange() {
     clearTimeout(orientationChangeTimeout);
     orientationChangeTimeout = setTimeout(() => {
         console.log('Orientation changed, adjusting layout...');
-        adjustMosaicLayout();
         // Preserve zoom state after orientation change
         if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
             setTimeout(() => applyTransform(false), 50);
@@ -389,7 +357,7 @@ function setupTouchHandlers() {
         container.addEventListener('touchmove', handleTouchMove, { passive: false });
         container.addEventListener('touchend', handleTouchEnd, { passive: false });
     }
-    
+
     // Setup year filter touch handling
     setupYearFilterTouchHandlers();
 }
@@ -401,11 +369,11 @@ function setupYearFilterTouchHandlers() {
         yearSlider.addEventListener('touchstart', function(e) {
             e.stopPropagation();
         }, { passive: true });
-        
+
         yearSlider.addEventListener('touchmove', function(e) {
             e.stopPropagation();
         }, { passive: true });
-        
+
         yearSlider.addEventListener('touchend', function(e) {
             e.stopPropagation();
         }, { passive: true });
