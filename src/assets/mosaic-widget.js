@@ -475,11 +475,17 @@ window.addEventListener('load', function() {
     setupModalEvents();
     setupYearFilter();
     setupTouchHandlers();
+    
+    // Initialize flag system
+    window.flagSystem = new TileFlagSystem();
+    
     // Update minimum zoom after everything is loaded
     setTimeout(() => {
         updateMinZoom();
         initializeMobileZoom();
         positionYearFilter();
+        // Update flag UI after everything is loaded
+        window.flagSystem.updateAllFlagUI();
     }, 100);
     console.log('All features initialized');
 });
@@ -571,13 +577,13 @@ function loadTooltipImage(tileRegion) {
 
 function handleTileClick(imagePath, isWebCompatible, tileElement, tileImageUrl, distanceInfo, dateInfo) {
     if (isMobile()) {
-        showMobileModal(tileImageUrl, distanceInfo, dateInfo);
+        showMobileModal(tileImageUrl, distanceInfo, dateInfo, tileElement);
     } else {
         openTileImage(imagePath, isWebCompatible);
     }
 }
 
-function showMobileModal(imageUrl, distanceInfo, dateInfo) {
+function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
     const modal = document.getElementById('mobile-modal');
     const modalImage = document.getElementById('modal-image');
     const modalInfo = document.getElementById('modal-info');
@@ -585,7 +591,32 @@ function showMobileModal(imageUrl, distanceInfo, dateInfo) {
     if (!modal || !modalImage || !modalInfo) return;
 
     modalImage.src = imageUrl;
-    modalInfo.innerHTML = distanceInfo + dateInfo;
+    
+    // Get tile hash and path from the tile element
+    const tileHash = tileElement ? tileElement.dataset.tileHash : '';
+    const tilePath = tileElement ? tileElement.dataset.tilePath : '';
+    window.currentMobileTileHash = tileHash;
+    
+    // Base content
+    let content = distanceInfo + dateInfo;
+    
+    // Add flag UI for mobile
+    if (tileHash && window.flagSystem) {
+        const isFlagged = window.flagSystem.flaggedTiles.has(tileHash);
+        content += `
+            <div class="mobile-flag-container">
+                <div class="flag-status">${isFlagged ? 
+                    '<div style="color: #ff6b6b; margin: 8px 0; font-size: 14px;">⚠️ This image has been flagged</div>' : ''}</div>
+                <button class="flag-button mobile-flag-btn" 
+                        onclick="window.flagSystem.toggleFlag('${tileHash}', '${tilePath}')" 
+                        style="margin-top: 12px; padding: 8px 16px; font-size: 14px;">
+                    ${isFlagged ? '✓ Flagged' : '🚩 Flag for Review'}
+                </button>
+            </div>
+        `;
+    }
+    
+    modalInfo.innerHTML = content;
     modal.classList.add('active');
 
     // Prevent body scrolling when modal is open
@@ -681,6 +712,180 @@ function updateYearFilter(sliderValue) {
         });
 
         console.log('Year filter results - Enabled:', enabledCount, 'Disabled:', disabledCount);
+    }
+}
+
+// Flag management system
+class TileFlagSystem {
+    constructor() {
+        this.apiBase = 'https://api.casadelmanco.com/v1'; // Will be implemented later
+        this.flaggedTiles = new Map(); // tileHash -> flagData
+        this.rateLimiter = new RateLimiter();
+        this.useLocalStorage = true; // Phase 1: use localStorage
+        this.loadFromLocalStorage();
+    }
+
+    loadFromLocalStorage() {
+        try {
+            const stored = localStorage.getItem('mosaic-flags');
+            if (stored) {
+                const data = JSON.parse(stored);
+                this.flaggedTiles = new Map(Object.entries(data));
+                console.log('Loaded', this.flaggedTiles.size, 'flags from localStorage');
+            }
+        } catch (error) {
+            console.warn('Failed to load flags from localStorage:', error);
+        }
+    }
+
+    saveToLocalStorage() {
+        try {
+            const data = Object.fromEntries(this.flaggedTiles);
+            localStorage.setItem('mosaic-flags', JSON.stringify(data));
+        } catch (error) {
+            console.warn('Failed to save flags to localStorage:', error);
+        }
+    }
+
+    async toggleFlag(tileHash, tilePath) {
+        const isFlagged = this.flaggedTiles.has(tileHash);
+        
+        if (!isFlagged) {
+            // Flagging a tile
+            if (!this.rateLimiter.canFlag()) {
+                this.showToast('Rate limit reached. Please wait before flagging more tiles.');
+                return;
+            }
+            
+            this.rateLimiter.consume();
+            this.flaggedTiles.set(tileHash, { 
+                tilePath: tilePath,
+                flaggedAt: new Date().toISOString(),
+                flaggedBy: 'anonymous'
+            });
+            this.showToast('Tile flagged for review');
+        } else {
+            // Unflagging a tile  
+            this.flaggedTiles.delete(tileHash);
+            this.showToast('Flag removed');
+        }
+        
+        this.saveToLocalStorage();
+        this.updateFlagUI(tileHash);
+        this.updateMobileFlagUI(tileHash);
+    }
+
+    updateFlagUI(tileHash) {
+        const isFlagged = this.flaggedTiles.has(tileHash);
+        
+        // Update desktop tooltip
+        const flagStatus = document.getElementById(`flag-status-${tileHash}`);
+        const flagButton = document.getElementById(`flag-btn-${tileHash}`);
+        
+        if (flagStatus) {
+            flagStatus.innerHTML = isFlagged ? 
+                '<div style="color: #ff6b6b; font-size: 12px; margin: 4px 0;">⚠️ This image has been flagged</div>' : '';
+        }
+        
+        if (flagButton) {
+            flagButton.textContent = isFlagged ? '✓ Flagged' : '🚩 Flag for Review';
+            flagButton.disabled = isFlagged;
+            flagButton.style.background = isFlagged ? '#666' : '#ff6b6b';
+            flagButton.style.cursor = isFlagged ? 'default' : 'pointer';
+        }
+    }
+
+    updateMobileFlagUI(tileHash) {
+        // Update mobile modal if it's currently showing this tile
+        if (window.currentMobileTileHash === tileHash) {
+            const isFlagged = this.flaggedTiles.has(tileHash);
+            const modalInfo = document.getElementById('modal-info');
+            
+            if (modalInfo) {
+                // Find existing flag UI or create it
+                let flagContainer = modalInfo.querySelector('.mobile-flag-container');
+                if (!flagContainer) {
+                    flagContainer = document.createElement('div');
+                    flagContainer.className = 'mobile-flag-container';
+                    modalInfo.appendChild(flagContainer);
+                }
+                
+                flagContainer.innerHTML = `
+                    <div class="flag-status">${isFlagged ? 
+                        '<div style="color: #ff6b6b; margin: 8px 0;">⚠️ This image has been flagged</div>' : ''}</div>
+                    <button class="flag-button mobile-flag-btn" 
+                            onclick="window.flagSystem.toggleFlag('${tileHash}', '${this.flaggedTiles.get(tileHash)?.tilePath || ''}')">
+                        ${isFlagged ? '✓ Flagged' : '🚩 Flag for Review'}
+                    </button>
+                `;
+            }
+        }
+    }
+
+    updateAllFlagUI() {
+        // Update all visible flag UIs
+        this.flaggedTiles.forEach((_, tileHash) => {
+            this.updateFlagUI(tileHash);
+        });
+    }
+
+    showToast(message) {
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.textContent = message;
+        toast.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 6px;
+            z-index: 10000;
+            font-size: 14px;
+        `;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+    }
+}
+
+// Rate limiter for anonymous flagging (10 flags per minute)
+class RateLimiter {
+    constructor() {
+        this.maxFlags = 10;
+        this.windowMs = 60 * 1000; // 1 minute
+        this.flags = [];
+    }
+
+    canFlag() {
+        const now = Date.now();
+        // Remove flags older than window
+        this.flags = this.flags.filter(time => now - time < this.windowMs);
+        return this.flags.length < this.maxFlags;
+    }
+
+    consume() {
+        if (this.canFlag()) {
+            this.flags.push(Date.now());
+            return true;
+        }
+        return false;
+    }
+
+    getRemainingFlags() {
+        const now = Date.now();
+        this.flags = this.flags.filter(time => now - time < this.windowMs);
+        return Math.max(0, this.maxFlags - this.flags.length);
+    }
+}
+
+// Global toggle flag function
+function toggleFlag(tileHash, tilePath) {
+    if (window.flagSystem) {
+        window.flagSystem.toggleFlag(tileHash, tilePath);
+    } else {
+        console.warn('Flag system not initialized');
     }
 }
 

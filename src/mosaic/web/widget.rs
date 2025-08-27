@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use sha2::{Sha256, Digest};
 use super::super::stats::{MosaicConfig, RenderStats};
 use super::super::tiles::TileSet;
 
@@ -338,6 +339,13 @@ where
                 )
             };
 
+            // Generate tile path hash for flagging system
+            let tile_path_hash = {
+                let mut hasher = Sha256::new();
+                hasher.update(tile_path.to_string_lossy().as_bytes());
+                format!("{:x}", hasher.finalize())[..16].to_string()
+            };
+
             html.push_str(&format!(r#"
         <div class="tile-region" style="left: {:.2}%; top: {:.2}%; width: {:.2}%; height: {:.2}%;"
              onclick="handleTileClick('{}', {}, this, '{}', '{}', '{}')"
@@ -345,11 +353,20 @@ where
              data-tile-image="{}"
              data-distance-info="{}"
              data-date-info="{}"
-             data-year="{}">
+             data-year="{}"
+             data-tile-hash="{}"
+             data-tile-path="{}">
             <div class="tooltip">
                 <img data-src="{}" alt="Tile Preview" class="tooltip-image" onerror="this.style.display='none'" style="display:none"/><br/>
                 {}
                 {}
+                
+                <!-- Flag UI -->
+                <div class="flag-status" id="flag-status-{}"></div>
+                <button class="flag-button" id="flag-btn-{}" 
+                        onclick="event.stopPropagation(); toggleFlag('{}', '{}')">
+                    🚩 Flag for Review
+                </button>
             </div>
         </div>"#,
                 left_percent, top_percent, width_percent, height_percent,
@@ -360,9 +377,15 @@ where
                 distance_info.replace("\"", "&quot;").replace("'", "&#39;"),
                 date_info.replace("\"", "&quot;").replace("'", "&#39;"),
                 tile_year,
+                tile_path_hash,
+                tile_path.display().to_string().replace("\"", "&quot;").replace("'", "&#39;"),
                 tooltip_image_url,
                 distance_info,
-                date_info
+                date_info,
+                tile_path_hash,
+                tile_path_hash,
+                tile_path_hash,
+                tile_path.display().to_string().replace("\"", "&quot;").replace("'", "&#39;")
             ));
         }
 

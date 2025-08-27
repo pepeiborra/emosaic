@@ -200,6 +200,75 @@ body {
     }
 }
 
+/* Flag Button Styles */
+.flag-button {
+    background: #ff6b6b;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    margin-top: 8px;
+    transition: background-color 0.2s ease;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.flag-button:hover:not(:disabled) {
+    background: #ff5252;
+}
+
+.flag-button:disabled {
+    background: #666;
+    cursor: default;
+}
+
+.flag-button:active:not(:disabled) {
+    background: #d32f2f;
+}
+
+/* Mobile flag button */
+.mobile-flag-btn {
+    padding: 10px 16px;
+    font-size: 14px;
+    margin-top: 12px;
+    border-radius: 6px;
+}
+
+/* Flag status display */
+.flag-status {
+    margin: 4px 0;
+}
+
+.flag-status div {
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+/* Mobile flag container */
+.mobile-flag-container {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #eee;
+}
+
+/* Toast notifications */
+.toast {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 12px 24px;
+    border-radius: 6px;
+    z-index: 10000;
+    font-size: 14px;
+    animation: slideUp 0.3s ease;
+    pointer-events: none;
+}
+
 /* Year Filter Styles */
 .year-filter-container {
     position: absolute;
