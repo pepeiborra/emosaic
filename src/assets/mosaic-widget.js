@@ -9,12 +9,12 @@ function isMobile() {
 function attemptHideIOSToolbar() {
     if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
         console.log('iOS detected - attempting to hide Safari toolbar');
-        
+
         // Method 1: Scroll trick to hide address bar
         setTimeout(() => {
             window.scrollTo(0, 1);
         }, 100);
-        
+
         // Method 2: Request fullscreen if supported
         if (document.documentElement.requestFullscreen) {
             document.addEventListener('touchstart', function requestFullscreen() {
@@ -24,7 +24,7 @@ function attemptHideIOSToolbar() {
                 document.removeEventListener('touchstart', requestFullscreen);
             }, { once: true });
         }
-        
+
         // Method 3: Detect if running as web app (added to home screen)
         if (window.navigator.standalone) {
             console.log('Running as standalone web app - toolbar already hidden');
@@ -128,26 +128,26 @@ function constrainPan() {
         console.log('Desktop: no pan constraints');
         return;
     }
-    
+
     const image = document.querySelector('.mosaic-image');
     const container = document.querySelector('.mosaic-container');
-    
+
     if (!image || !container || image.naturalWidth === 0 || image.naturalHeight === 0) {
         return;
     }
-    
+
     const containerRect = container.getBoundingClientRect();
-    
+
     // Calculate the current scaled image dimensions
     const scaledImageWidth = image.naturalWidth * currentZoom;
     const scaledImageHeight = image.naturalHeight * currentZoom;
-    
+
     console.log('Pan constraint - Container:', containerRect.width, 'x', containerRect.height);
     console.log('Pan constraint - Scaled image:', scaledImageWidth, 'x', scaledImageHeight);
-    
+
     let constrainedPanX = currentPanX;
     let constrainedPanY = currentPanY;
-    
+
     // Constrain horizontal pan
     if (scaledImageWidth > containerRect.width) {
         // Image is wider than container - constrain to keep image filling screen
@@ -160,7 +160,7 @@ function constrainPan() {
         constrainedPanX = 0;
         console.log('Image narrower than container - centering horizontally');
     }
-    
+
     // Constrain vertical pan
     if (scaledImageHeight > containerRect.height) {
         // Image is taller than container - constrain to keep image filling screen
@@ -173,7 +173,7 @@ function constrainPan() {
         constrainedPanY = 0;
         console.log('Image shorter than container - centering vertically');
     }
-    
+
     // Update pan values if they were constrained
     if (constrainedPanX !== currentPanX || constrainedPanY !== currentPanY) {
         console.log('Pan constrained from:', currentPanX, currentPanY, 'to:', constrainedPanX, constrainedPanY);
@@ -185,7 +185,7 @@ function constrainPan() {
 function applyTransform(smooth = false) {
     // Apply pan constraints before transform on mobile
     constrainPan();
-    
+
     const zoomContainer = document.querySelector('.zoom-container');
     if (zoomContainer) {
         // Add or remove smooth transition class
@@ -507,10 +507,10 @@ window.addEventListener('load', function() {
     setupYearFilter();
     setupTouchHandlers();
     setupSmartTooltips();
-    
+
     // Initialize flag system
     window.flagSystem = new TileFlagSystem();
-    
+
     // Update minimum zoom after everything is loaded
     setTimeout(() => {
         updateMinZoom();
@@ -689,7 +689,7 @@ function loadTooltipImage(tileRegion) {
     if (isMobile()) {
         return;
     }
-    
+
     const img = tileRegion.querySelector('.tooltip-image');
     if (img && img.dataset.src && !img.src) {
         console.log('Loading tooltip image for tile');
@@ -717,31 +717,31 @@ function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
     if (!modal || !modalImage || !modalInfo) return;
 
     modalImage.src = imageUrl;
-    
+
     // Get tile hash and path from the tile element
     const tileHash = tileElement ? tileElement.dataset.tileHash : '';
     const tilePath = tileElement ? tileElement.dataset.tilePath : '';
     window.currentMobileTileHash = tileHash;
-    
+
     // Base content
     let content = distanceInfo + dateInfo;
-    
+
     // Add flag UI for mobile
     if (tileHash && window.flagSystem) {
         const isFlagged = window.flagSystem.flaggedTiles.has(tileHash);
         content += `
             <div class="mobile-flag-container">
-                <div class="flag-status">${isFlagged ? 
+                <div class="flag-status">${isFlagged ?
                     '<div style="color: #ff6b6b; margin: 8px 0; font-size: 14px;">⚠️ This image has been flagged</div>' : ''}</div>
-                <button class="flag-button mobile-flag-btn" 
-                        onclick="window.flagSystem.toggleFlag('${tileHash}', '${tilePath}')" 
+                <button class="flag-button mobile-flag-btn"
+                        onclick="window.flagSystem.toggleFlag('${tileHash}', '${tilePath}')"
                         style="margin-top: 12px; padding: 8px 16px; font-size: 14px;">
                     ${isFlagged ? '✓ Flagged' : '🚩 Flag for Review'}
                 </button>
             </div>
         `;
     }
-    
+
     modalInfo.innerHTML = content;
     modal.classList.add('active');
 
@@ -845,12 +845,12 @@ function updateYearFilter(sliderValue) {
 class TileFlagSystem {
     constructor() {
         // API endpoint - will be set after deployment
-        this.apiBase = 'https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod';
+        this.apiBase = 'https://lm86ri8yyk.execute-api.us-east-1.amazonaws.com/prod';
         this.flaggedTiles = new Map(); // tileHash -> flagData
         this.rateLimiter = new RateLimiter();
         this.useLocalStorage = false; // Phase 2: use real API
         this.fallbackToLocalStorage = true; // Fallback if API fails
-        
+
         // Load initial flags
         this.loadFlags();
     }
@@ -860,6 +860,8 @@ class TileFlagSystem {
         if (!this.useLocalStorage) {
             try {
                 await this.loadFromAPI();
+                // After successful API load, check for localStorage migration
+                await this.migrateFromLocalStorageIfNeeded();
                 return;
             } catch (error) {
                 console.warn('Failed to load flags from API, falling back to localStorage:', error);
@@ -868,7 +870,7 @@ class TileFlagSystem {
                 }
             }
         }
-        
+
         // Load from localStorage (fallback or Phase 1)
         this.loadFromLocalStorage();
     }
@@ -877,7 +879,7 @@ class TileFlagSystem {
         // Get all tile hashes currently on the page
         const tileElements = document.querySelectorAll('[data-tile-hash]');
         const tileHashes = Array.from(tileElements).map(el => el.dataset.tileHash).filter(Boolean);
-        
+
         if (tileHashes.length === 0) {
             console.log('No tiles found on page');
             return;
@@ -896,7 +898,7 @@ class TileFlagSystem {
         }
 
         const data = await response.json();
-        
+
         // Convert API response to our internal format
         this.flaggedTiles.clear();
         Object.entries(data.flags || {}).forEach(([tileHash, flagInfo]) => {
@@ -932,36 +934,126 @@ class TileFlagSystem {
         }
     }
 
+    async migrateFromLocalStorageIfNeeded() {
+        // Check if there are flags in localStorage to migrate
+        const stored = localStorage.getItem('mosaic-flags');
+        if (!stored) {
+            // No flags to migrate, mark as attempted
+            localStorage.setItem('mosaic-flags-migration-attempted', 'true');
+            return;
+        }
+
+        try {
+            var localFlags = JSON.parse(stored);
+            const flagCount = Object.keys(localFlags).length;
+
+            if (flagCount === 0) {
+                return;
+            }
+
+            console.log(`Migrating ${flagCount} flags from localStorage to API...`);
+            this.showToast(`Migrating ${flagCount} saved flags to server...`);
+
+            let successCount = 0;
+            let failCount = 0;
+            const failures = new Map();
+
+            // Migrate each flag to the API
+            for (const [tileHash, flagData] of Object.entries(localFlags)) {
+                try {
+                    const response = await fetch(`${this.apiBase}/tiles/${tileHash}/flag`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            tilePath: flagData.tilePath || ''
+                        })
+                    });
+
+                    if (response.ok) {
+                        successCount++;
+                        // Add to current flagged tiles
+                        this.flaggedTiles.set(tileHash, {
+                            tilePath: flagData.tilePath || '',
+                            flaggedAt: flagData.flaggedAt || new Date().toISOString()
+                        });
+                    } else {
+                        failCount++;
+                        failures.set(tileHash, flagData);
+                        console.warn(`Failed to migrate flag for tile ${tileHash}:`, response.status);
+                    }
+                } catch (error) {
+                    failCount++;
+                    console.warn(`Error migrating flag for tile ${tileHash}:`, error);
+                }
+            }
+
+
+            if (successCount > 0) {
+                if (failCount === 0) {
+                    // Complete success - clear localStorage
+                    localStorage.removeItem('mosaic-flags');
+                    this.showToast(`✅ Successfully migrated ${successCount} flags to server`);
+                    console.log(`Migration complete: ${successCount} flags successfully migrated`);
+                } else {
+                    localStorage.setItem('mosaic-flags', Object.fromEntries(failures));
+                    // Partial success
+                    this.showToast(`⚠️ Migrated ${successCount}/${flagCount} flags (${failCount} failed)`);
+                    console.log(`Migration partial: ${successCount} succeeded, ${failCount} failed`);
+                }
+
+                // Update UI to show current flag states
+                this.updateFlagButtons();
+            } else {
+                // Complete failure
+                this.showToast(`❌ Failed to migrate flags to server (keeping local copy)`);
+                console.log('Migration failed: no flags were successfully migrated');
+            }
+
+        } catch (error) {
+            console.error('Error during localStorage migration:', error);
+            this.showToast('⚠️ Flag migration failed (keeping local copy)');
+        }
+    }
+
+    // Manual migration trigger (for testing or user-initiated migration)
+    async forceMigration() {
+        // Reset migration flag to allow re-migration
+        localStorage.removeItem('mosaic-flags-migration-attempted');
+        await this.migrateFromLocalStorageIfNeeded();
+    }
+
     async toggleFlag(tileHash, tilePath) {
         const isFlagged = this.flaggedTiles.has(tileHash);
-        
+
         if (!isFlagged) {
             // Flagging a tile
             if (!this.rateLimiter.canFlag()) {
                 this.showToast('Rate limit reached. Please wait before flagging more tiles.');
                 return;
             }
-            
+
             let success = false;
-            
+
             if (!this.useLocalStorage) {
                 // Try API first
                 success = await this.flagTileAPI(tileHash, tilePath);
             }
-            
+
             if (success || this.useLocalStorage) {
                 // Update local state
                 this.rateLimiter.consume();
-                this.flaggedTiles.set(tileHash, { 
+                this.flaggedTiles.set(tileHash, {
                     tilePath: tilePath,
                     flaggedAt: new Date().toISOString(),
                     flaggedBy: 'anonymous'
                 });
-                
+
                 if (this.useLocalStorage) {
                     this.saveToLocalStorage();
                 }
-                
+
                 this.showToast('Tile flagged for review');
             } else {
                 this.showToast('Failed to flag tile. Please try again.');
@@ -970,25 +1062,25 @@ class TileFlagSystem {
         } else {
             // Unflagging a tile
             let success = false;
-            
+
             if (!this.useLocalStorage) {
                 success = await this.unflagTileAPI(tileHash);
             }
-            
+
             if (success || this.useLocalStorage) {
                 this.flaggedTiles.delete(tileHash);
-                
+
                 if (this.useLocalStorage) {
                     this.saveToLocalStorage();
                 }
-                
+
                 this.showToast('Flag removed');
             } else {
                 this.showToast('Failed to remove flag. Please try again.');
                 return;
             }
         }
-        
+
         this.updateFlagUI(tileHash);
         this.updateMobileFlagUI(tileHash);
     }
@@ -1030,16 +1122,16 @@ class TileFlagSystem {
 
     updateFlagUI(tileHash) {
         const isFlagged = this.flaggedTiles.has(tileHash);
-        
+
         // Update desktop tooltip
         const flagStatus = document.getElementById(`flag-status-${tileHash}`);
         const flagButton = document.getElementById(`flag-btn-${tileHash}`);
-        
+
         if (flagStatus) {
-            flagStatus.innerHTML = isFlagged ? 
+            flagStatus.innerHTML = isFlagged ?
                 '<div style="color: #ff6b6b; font-size: 12px; margin: 4px 0;">⚠️ This image has been flagged</div>' : '';
         }
-        
+
         if (flagButton) {
             flagButton.textContent = isFlagged ? '✓ Flagged' : '🚩 Flag for Review';
             flagButton.disabled = isFlagged;
@@ -1053,7 +1145,7 @@ class TileFlagSystem {
         if (window.currentMobileTileHash === tileHash) {
             const isFlagged = this.flaggedTiles.has(tileHash);
             const modalInfo = document.getElementById('modal-info');
-            
+
             if (modalInfo) {
                 // Find existing flag UI or create it
                 let flagContainer = modalInfo.querySelector('.mobile-flag-container');
@@ -1062,11 +1154,11 @@ class TileFlagSystem {
                     flagContainer.className = 'mobile-flag-container';
                     modalInfo.appendChild(flagContainer);
                 }
-                
+
                 flagContainer.innerHTML = `
-                    <div class="flag-status">${isFlagged ? 
+                    <div class="flag-status">${isFlagged ?
                         '<div style="color: #ff6b6b; margin: 8px 0;">⚠️ This image has been flagged</div>' : ''}</div>
-                    <button class="flag-button mobile-flag-btn" 
+                    <button class="flag-button mobile-flag-btn"
                             onclick="window.flagSystem.toggleFlag('${tileHash}', '${this.flaggedTiles.get(tileHash)?.tilePath || ''}')">
                         ${isFlagged ? '✓ Flagged' : '🚩 Flag for Review'}
                     </button>

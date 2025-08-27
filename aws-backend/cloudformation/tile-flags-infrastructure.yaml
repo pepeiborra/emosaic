@@ -1,0 +1,360 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Mosaic Tile Flagging System - DynamoDB Tables and API Infrastructure'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'prod'
+    Description: Environment name
+  
+  CorsOrigin:
+    Type: String
+    Default: 'https://casadelmanco.com'
+    Description: CORS origin for API Gateway
+
+Resources:
+  # DynamoDB Table for Tile Flags
+  TileFlagsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${Environment}-tile-flags'
+      AttributeDefinitions:
+        - AttributeName: 'tile_hash'
+          AttributeType: 'S'
+      KeySchema:
+        - AttributeName: 'tile_hash'
+          KeyType: 'HASH'
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: 'ttl'
+        Enabled: true
+      GlobalSecondaryIndexes:
+        - IndexName: 'flagged-at-index'
+          KeySchema:
+            - AttributeName: 'tile_hash'
+              KeyType: 'HASH'
+          Projection:
+            ProjectionType: 'ALL'
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: 'Project'
+          Value: 'Mosaic'
+        - Key: 'Environment'
+          Value: !Ref Environment
+
+  # DynamoDB Table for Rate Limiting
+  RateLimitTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${Environment}-rate-limits'
+      AttributeDefinitions:
+        - AttributeName: 'ip_minute'
+          AttributeType: 'S'
+      KeySchema:
+        - AttributeName: 'ip_minute'
+          KeyType: 'HASH'
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: 'ttl'
+        Enabled: true
+      Tags:
+        - Key: 'Project'
+          Value: 'Mosaic'
+        - Key: 'Environment'
+          Value: !Ref Environment
+
+  # IAM Role for Lambda Functions
+  TileFlagsLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-tile-flags-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: 'DynamoDBAccess'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                Resource:
+                  - !GetAtt TileFlagsTable.Arn
+                  - !GetAtt RateLimitTable.Arn
+                  - !Sub '${TileFlagsTable.Arn}/index/*'
+
+  # Lambda Function: Toggle Flag
+  ToggleFlagFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-toggle-tile-flag'
+      Runtime: python3.9
+      Handler: toggle_flag.lambda_handler
+      Role: !GetAtt TileFlagsLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - will be replaced with actual code
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Hello'}
+      Environment:
+        Variables:
+          TILE_FLAGS_TABLE: !Ref TileFlagsTable
+          RATE_LIMIT_TABLE: !Ref RateLimitTable
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 30
+
+  # Lambda Function: Get Flags
+  GetFlagsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-get-tile-flags'
+      Runtime: python3.9
+      Handler: get_flags.lambda_handler
+      Role: !GetAtt TileFlagsLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - will be replaced with actual code
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Hello'}
+      Environment:
+        Variables:
+          TILE_FLAGS_TABLE: !Ref TileFlagsTable
+          RATE_LIMIT_TABLE: !Ref RateLimitTable
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 30
+
+  # API Gateway REST API
+  TileFlagsAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${Environment}-tile-flags-api'
+      Description: 'API for mosaic tile flagging system'
+      EndpointConfiguration:
+        Types:
+          - EDGE
+
+  # API Gateway Resource: /tiles
+  TilesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ParentId: !GetAtt TileFlagsAPI.RootResourceId
+      PathPart: 'tiles'
+
+  # API Gateway Resource: /tiles/{tileHash}
+  TileHashResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ParentId: !Ref TilesResource
+      PathPart: '{tileHash}'
+
+  # API Gateway Resource: /tiles/{tileHash}/flag
+  FlagResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ParentId: !Ref TileHashResource
+      PathPart: 'flag'
+
+  # API Gateway Resource: /tiles/flags (bulk get)
+  BulkFlagsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ParentId: !Ref TilesResource
+      PathPart: 'flags'
+
+  # OPTIONS method for CORS - Toggle Flag endpoint
+  ToggleFlagOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ResourceId: !Ref FlagResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # POST method - Flag a tile
+  FlagTileMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ResourceId: !Ref FlagResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      RequestParameters:
+        method.request.path.tileHash: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt ToggleFlagFunction.Arn
+
+  # DELETE method - Unflag a tile
+  UnflagTileMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ResourceId: !Ref FlagResource
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      RequestParameters:
+        method.request.path.tileHash: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt ToggleFlagFunction.Arn
+
+  # OPTIONS method for CORS - Bulk flags endpoint
+  BulkFlagsOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ResourceId: !Ref BulkFlagsResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # POST method - Get bulk flags
+  GetBulkFlagsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ResourceId: !Ref BulkFlagsResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt GetFlagsFunction.Arn
+
+  # Lambda permissions for API Gateway
+  ToggleFlagLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ToggleFlagFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TileFlagsAPI}/*/*/*'
+
+  GetFlagsLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GetFlagsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TileFlagsAPI}/*/*/*'
+
+  # API Gateway Deployment
+  TileFlagsDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - FlagTileMethod
+      - UnflagTileMethod
+      - ToggleFlagOptionsMethod
+      - GetBulkFlagsMethod
+      - BulkFlagsOptionsMethod
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      StageName: !Ref Environment
+
+  # Usage Plan for Rate Limiting
+  TileFlagsUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn:
+      - TileFlagsDeployment
+    Properties:
+      UsagePlanName: !Sub '${Environment}-tile-flags-usage-plan'
+      Description: 'Usage plan for tile flagging API'
+      Throttle:
+        BurstLimit: 20
+        RateLimit: 10
+      Quota:
+        Limit: 1000
+        Period: DAY
+      ApiStages:
+        - ApiId: !Ref TileFlagsAPI
+          Stage: !Ref Environment
+
+Outputs:
+  TileFlagsTableName:
+    Description: 'Name of the tile flags DynamoDB table'
+    Value: !Ref TileFlagsTable
+    Export:
+      Name: !Sub '${Environment}-tile-flags-table'
+
+  RateLimitTableName:
+    Description: 'Name of the rate limit DynamoDB table'
+    Value: !Ref RateLimitTable
+    Export:
+      Name: !Sub '${Environment}-rate-limit-table'
+
+  APIGatewayId:
+    Description: 'ID of the API Gateway'
+    Value: !Ref TileFlagsAPI
+    Export:
+      Name: !Sub '${Environment}-tile-flags-api-id'
+
+  ToggleFlagFunctionName:
+    Description: 'Name of the toggle flag Lambda function'
+    Value: !Ref ToggleFlagFunction
+
+  GetFlagsFunctionName:
+    Description: 'Name of the get flags Lambda function'
+    Value: !Ref GetFlagsFunction
+
+  APIGatewayURL:
+    Description: 'URL of the API Gateway'
+    Value: !Sub 'https://${TileFlagsAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${Environment}-tile-flags-api-url'

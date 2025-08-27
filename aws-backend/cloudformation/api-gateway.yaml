@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'API Gateway configuration for Tile Flagging System'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'prod'
+  
+  CorsOrigin:
+    Type: String
+    Default: 'https://casadelmanco.com'
+
+Resources:
+  # OPTIONS method for CORS - Toggle Flag endpoint
+  ToggleFlagOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue 
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref FlagResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # POST method - Flag a tile
+  FlagTileMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue 
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref FlagResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      RequestParameters:
+        method.request.path.tileHash: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt ToggleFlagFunction.Arn
+
+  # DELETE method - Unflag a tile
+  UnflagTileMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue 
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref FlagResource
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      RequestParameters:
+        method.request.path.tileHash: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST  # Lambda proxy always uses POST
+        Uri: !Sub 
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt ToggleFlagFunction.Arn
+
+  # OPTIONS method for CORS - Bulk flags endpoint
+  BulkFlagsOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue 
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref BulkFlagsResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # POST method - Get bulk flags
+  GetBulkFlagsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue 
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref BulkFlagsResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt GetFlagsFunction.Arn
+
+  # Lambda permissions for API Gateway
+  ToggleFlagLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !ImportValue 
+        Fn::Sub: '${Environment}-toggle-tile-flag'
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue 
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  GetFlagsLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !ImportValue 
+        Fn::Sub: '${Environment}-get-tile-flags'
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue 
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  # API Gateway Deployment
+  TileFlagsDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - FlagTileMethod
+      - UnflagTileMethod
+      - ToggleFlagOptionsMethod
+      - GetBulkFlagsMethod
+      - BulkFlagsOptionsMethod
+    Properties:
+      RestApiId: !ImportValue 
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      StageName: !Ref Environment
+
+  # Usage Plan for Rate Limiting
+  TileFlagsUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      UsagePlanName: !Sub '${Environment}-tile-flags-usage-plan'
+      Description: 'Usage plan for tile flagging API'
+      Throttle:
+        BurstLimit: 20    # Allow bursts up to 20 requests
+        RateLimit: 10     # 10 requests per second baseline
+      Quota:
+        Limit: 1000       # 1000 requests per day
+        Period: DAY
+      ApiStages:
+        - ApiId: !ImportValue 
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+          Stage: !Ref Environment
+
+Outputs:
+  APIGatewayURL:
+    Description: 'URL of the API Gateway'
+    Value: !Sub 
+      - 'https://${ApiId}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+      - ApiId: !ImportValue 
+          Fn::Sub: '${Environment}-tile-flags-api-id'
+    Export:
+      Name: !Sub '${Environment}-tile-flags-api-url'
+
+  UsagePlanId:
+    Description: 'ID of the usage plan'
+    Value: !Ref TileFlagsUsagePlan
+    Export:
+      Name: !Sub '${Environment}-tile-flags-usage-plan-id'
