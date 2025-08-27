@@ -98,7 +98,6 @@ function calculateMinZoom() {
 }
 
 function updateMinZoom() {
-
     const newMinZoom = calculateMinZoom();
     const oldMinZoom = minZoom;
     minZoom = newMinZoom;
@@ -123,12 +122,8 @@ function initializeMobileZoom() {
     }
 }
 
+// Constrain panning (on mobile)
 function constrainPan() {
-    if (!isMobile()) {
-        console.log('Desktop: no pan constraints');
-        return;
-    }
-
     const image = document.querySelector('.mosaic-image');
     const container = document.querySelector('.mosaic-container');
 
@@ -184,7 +179,9 @@ function constrainPan() {
 
 function applyTransform(smooth = false) {
     // Apply pan constraints before transform on mobile
-    constrainPan();
+    if (isMobile()) {
+        constrainPan();
+    }
 
     const zoomContainer = document.querySelector('.zoom-container');
     if (zoomContainer) {
@@ -199,15 +196,13 @@ function applyTransform(smooth = false) {
         zoomContainer.style.transform = transformValue;
 
         // Update CSS variable to counteract zoom for year filter
-        updateYearFilterScale();
+        if (isMobile()) {
+            positionYearFilter();
+        }
     }
 }
 
-function updateYearFilterScale() {
-    // Position year filter at bottom-right of visible image
-    positionYearFilter();
-}
-
+// Position year filter at bottom-right of visible image (used on mobile)
 function positionYearFilter() {
     const yearFilter = document.querySelector('.year-filter-container.image-positioned');
     const image = document.querySelector('.mosaic-image');
@@ -215,6 +210,10 @@ function positionYearFilter() {
 
     if (!yearFilter || !image || !container) {
         console.log('Year filter positioning skipped - missing elements');
+        return;
+    }
+
+    if (!isMobile()) {
         return;
     }
 
@@ -237,7 +236,7 @@ function positionYearFilter() {
         return;
     }
 
-    // Calculate position relative to container
+    // Calculate position relative to container (mobile only)
     const rightOffset = 10; // pixels from right edge of image
     const bottomOffset = 10; // pixels from bottom edge of image
 
@@ -513,25 +512,29 @@ window.addEventListener('load', function() {
 
     // Update minimum zoom after everything is loaded
     setTimeout(() => {
-        updateMinZoom();
-        initializeMobileZoom();
-        positionYearFilter();
+        if (isMobile()) {
+            updateMinZoom();
+            initializeMobileZoom();
+            positionYearFilter();
+        }
     }, 100);
     console.log('All features initialized');
 });
 window.addEventListener('resize', function() {
     adjustMosaicLayout();
-    // Update minimum zoom after resize
-    updateMinZoom();
-    // Preserve zoom state after layout adjustment
-    if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
-        setTimeout(() => applyTransform(false), 10);
+    if (isMobile()) {
+        // Update minimum zoom after resize
+        updateMinZoom();
+        // Preserve zoom state after layout adjustment
+        if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
+            setTimeout(() => applyTransform(false), 10);
+        }
+        // Reposition year filter after resize
+        setTimeout(() => positionYearFilter(), 10);
     } else {
         // Reposition visible tooltips on desktop after resize
         setTimeout(() => repositionVisibleTooltips(), 10);
     }
-    // Reposition year filter after resize
-    setTimeout(() => positionYearFilter(), 10);
 });
 
 // Debounced orientation change handler
@@ -540,19 +543,22 @@ function handleOrientationChange() {
     clearTimeout(orientationChangeTimeout);
     orientationChangeTimeout = setTimeout(() => {
         console.log('Orientation changed, adjusting layout...');
-        adjustMosaicLayout();
-        // Update minimum zoom after orientation change
-        updateMinZoom();
-        // On mobile, reinitialize to minimum zoom after orientation change
-        initializeMobileZoom();
-        // Preserve zoom state after orientation change (only for desktop)
-        if (!isMobile() && (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0)) {
-            setTimeout(() => applyTransform(false), 50);
+        if (isMobile()) {
+            adjustMosaicLayout();
+            // Update minimum zoom after orientation change
+            updateMinZoom();
+            // On mobile, reinitialize to minimum zoom after orientation change
+            initializeMobileZoom();
+            // Reposition year filter after orientation change with additional delay
+            setTimeout(() => positionYearFilter(), 100);
+            // Additional positioning attempt for stubborn cases
+            setTimeout(() => positionYearFilter(), 300);
+        } else {
+            // Preserve zoom state after orientation change (only for desktop)
+            if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
+                setTimeout(() => applyTransform(false), 50);
+            }
         }
-        // Reposition year filter after orientation change with additional delay
-        setTimeout(() => positionYearFilter(), 100);
-        // Additional positioning attempt for stubborn cases
-        setTimeout(() => positionYearFilter(), 300);
     }, 150);
 }
 
@@ -1034,7 +1040,7 @@ class TileFlagSystem {
         }
 
         try {
-            var localFlags = JSON.parse(stored);
+            const localFlags = JSON.parse(stored);
             const flagCount = Object.keys(localFlags).length;
 
             if (flagCount === 0) {
