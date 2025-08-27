@@ -638,9 +638,19 @@ where
                 })
                 .collect();
             
-            // Create new TileSet from valid tiles, preserving date_taken
+            // Create new TileSet from valid tiles, renumbering indices sequentially
             let (paths, tiles): (Vec<PathBuf>, Vec<Tile<[Rgb<u8>; N]>>) = valid_data.into_iter().unzip();
-            TileSet::from_tiles(tiles, paths)
+            let renumbered_tiles: Vec<Tile<[Rgb<u8>; N]>> = tiles
+                .into_iter()
+                .enumerate()
+                .map(|(i, tile)| Tile {
+                    idx: (i + 1) as u16,
+                    colors: tile.colors,
+                    flipped: tile.flipped,
+                    date_taken: tile.date_taken,
+                })
+                .collect();
+            TileSet::from_tiles(renumbered_tiles, paths)
         })
         .unwrap_or_else(|| {
             let extensions = extensions.iter().map(OsString::from).collect();
