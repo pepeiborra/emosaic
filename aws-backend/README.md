@@ -22,12 +22,13 @@ Frontend (S3) → API Gateway → Lambda → DynamoDB
 ```
 
 ### Resources Created
-- **DynamoDB Tables**: 
+- **DynamoDB Tables**:
   - `prod-tile-flags`: Stores tile flag data
   - `prod-rate-limits`: Handles rate limiting (TTL enabled)
 - **Lambda Functions**:
   - `prod-toggle-tile-flag`: Flag/unflag tiles
   - `prod-get-tile-flags`: Bulk flag retrieval
+  - `prod-admin-get-all-flags`: Admin API for retrieving all flags
 - **API Gateway**: RESTful API with CORS support
 - **IAM Roles**: Proper permissions for Lambda→DynamoDB
 
@@ -107,6 +108,40 @@ Content-Type: application/json
 }
 ```
 
+### Admin: Get All Flags
+```http
+GET /admin/flags?limit=100&lastKey=...
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "flags": [
+    {
+      "tileHash": "abc123",
+      "tilePath": "/path/to/tile.jpg",
+      "flaggedAt": "2025-08-27T09:01:50.375576",
+      "flagStatus": "flagged",
+      "ttl": 1758877310
+    }
+  ],
+  "count": 1,
+  "hasMore": false,
+  "nextKey": "eyJ0aWxlX2hhc2giOiAiYWJjMTIzIn0=",
+  "summary": {
+    "total": 1,
+    "today": 1,
+    "thisWeek": 1,
+    "retrievedAt": "2025-08-27T09:06:49.523600Z"
+  }
+}
+```
+
+**Query Parameters:**
+- `limit`: Number of results (default 100, max 1000)
+- `lastKey`: Pagination token for next page
+
 ## 🔒 Rate Limiting
 
 - **Client-side**: 10 flags per minute (JavaScript)
@@ -118,6 +153,7 @@ Content-Type: application/json
 ### CloudWatch Logs
 - `/aws/lambda/prod-toggle-tile-flag`
 - `/aws/lambda/prod-get-tile-flags`
+- `/aws/lambda/prod-admin-get-all-flags`
 
 ### DynamoDB Metrics
 - Read/Write capacity usage
@@ -137,6 +173,9 @@ curl -X POST "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/tiles
 curl -X POST "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/tiles/flags" \
   -H "Content-Type: application/json" \
   -d '{"tileHashes": ["test123"]}'
+
+# Test admin API (get all flags)
+curl -X GET "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/admin/flags?limit=10"
 ```
 
 ### Load Testing
@@ -177,7 +216,7 @@ aws cloudformation describe-stacks --stack-name prod-tile-flags-infrastructure
 aws logs tail /aws/lambda/prod-toggle-tile-flag --follow
 
 # Check DynamoDB items
-aws dynamodb scan --table-name prod-tile-flags --max-items 10
+aws dynamodb scan --table-name prod-tile-flags --region us-east-1 --max-items 10
 ```
 
 ## 💰 Cost Optimization
@@ -197,7 +236,8 @@ aws cloudformation delete-stack --stack-name prod-tile-flags-infrastructure
 
 ## 📝 Next Steps
 
-1. **Admin Panel**: Create admin interface for reviewing flags
-2. **Analytics**: Add metrics for flag patterns
-3. **Notifications**: Alert on high flag volumes
-4. **Auto-moderation**: ML-based automatic flagging
+1. **Admin Panel**: Create web interface using the admin API for reviewing flags
+2. **Authentication**: Add proper authentication/authorization for admin endpoints
+3. **Analytics**: Add metrics for flag patterns and trends
+4. **Notifications**: Alert on high flag volumes
+5. **Auto-moderation**: ML-based automatic flagging

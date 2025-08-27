@@ -33,12 +33,14 @@ echo "✅ AWS CLI configured"
 echo ""
 echo "📦 Packaging Lambda functions..."
 
-# Create deployment package for toggle_flag
+# Create deployment package for Lambda functions
 cd lambda
 echo "Packaging toggle_flag..."
 zip -r ../toggle_flag.zip toggle_flag.py
 echo "Packaging get_flags..."
 zip -r ../get_flags.zip get_flags.py
+echo "Packaging admin_get_all_flags..."
+zip -r ../admin_get_all_flags.zip admin_get_all_flags.py
 cd ..
 
 # Step 2: Deploy infrastructure stack
@@ -77,6 +79,12 @@ GET_FUNCTION_NAME=$(aws cloudformation describe-stacks \
     --output text \
     --region $REGION)
 
+ADMIN_FUNCTION_NAME=$(aws cloudformation describe-stacks \
+    --stack-name $STACK_NAME_INFRA \
+    --query "Stacks[0].Outputs[?OutputKey=='AdminGetAllFlagsFunctionName'].OutputValue" \
+    --output text \
+    --region $REGION)
+
 echo "Updating $TOGGLE_FUNCTION_NAME..."
 aws lambda update-function-code \
     --function-name $TOGGLE_FUNCTION_NAME \
@@ -87,6 +95,12 @@ echo "Updating $GET_FUNCTION_NAME..."
 aws lambda update-function-code \
     --function-name $GET_FUNCTION_NAME \
     --zip-file fileb://get_flags.zip \
+    --region $REGION
+
+echo "Updating $ADMIN_FUNCTION_NAME..."
+aws lambda update-function-code \
+    --function-name $ADMIN_FUNCTION_NAME \
+    --zip-file fileb://admin_get_all_flags.zip \
     --region $REGION
 
 # Step 4: Get API endpoint
@@ -105,6 +119,7 @@ echo "API Endpoints:"
 echo "  POST   $API_URL/tiles/{tileHash}/flag     - Flag a tile"
 echo "  DELETE $API_URL/tiles/{tileHash}/flag     - Unflag a tile"
 echo "  POST   $API_URL/tiles/flags               - Get bulk flag status"
+echo "  GET    $API_URL/admin/flags               - Admin: Get all flags"
 echo ""
 
 # Step 6: Test API endpoints
@@ -124,7 +139,7 @@ else
 fi
 
 # Cleanup temporary files
-rm -f toggle_flag.zip get_flags.zip
+rm -f toggle_flag.zip get_flags.zip admin_get_all_flags.zip
 
 echo ""
 echo "🎉 Deployment completed successfully!"

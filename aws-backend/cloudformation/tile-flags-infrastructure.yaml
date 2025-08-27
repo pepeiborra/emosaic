@@ -90,6 +90,7 @@ Resources:
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
                   - dynamodb:Query
+                  - dynamodb:Scan
                   - dynamodb:BatchGetItem
                   - dynamodb:BatchWriteItem
                 Resource:
@@ -124,6 +125,26 @@ Resources:
       FunctionName: !Sub '${Environment}-get-tile-flags'
       Runtime: python3.9
       Handler: get_flags.lambda_handler
+      Role: !GetAtt TileFlagsLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - will be replaced with actual code
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': 'Hello'}
+      Environment:
+        Variables:
+          TILE_FLAGS_TABLE: !Ref TileFlagsTable
+          RATE_LIMIT_TABLE: !Ref RateLimitTable
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 30
+
+  # Lambda Function: Admin Get All Flags
+  AdminGetAllFlagsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-admin-get-all-flags'
+      Runtime: python3.9
+      Handler: admin_get_all_flags.lambda_handler
       Role: !GetAtt TileFlagsLambdaRole.Arn
       Code:
         ZipFile: |
@@ -177,6 +198,22 @@ Resources:
     Properties:
       RestApiId: !Ref TileFlagsAPI
       ParentId: !Ref TilesResource
+      PathPart: 'flags'
+
+  # API Gateway Resource: /admin
+  AdminResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ParentId: !GetAtt TileFlagsAPI.RootResourceId
+      PathPart: 'admin'
+
+  # API Gateway Resource: /admin/flags
+  AdminFlagsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ParentId: !Ref AdminResource
       PathPart: 'flags'
 
   # OPTIONS method for CORS - Toggle Flag endpoint
@@ -278,6 +315,46 @@ Resources:
           - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
           - LambdaArn: !GetAtt GetFlagsFunction.Arn
 
+  # OPTIONS method for CORS - Admin flags endpoint
+  AdminFlagsOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ResourceId: !Ref AdminFlagsResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # GET method - Admin get all flags
+  AdminGetAllFlagsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TileFlagsAPI
+      ResourceId: !Ref AdminFlagsResource
+      HttpMethod: GET
+      AuthorizationType: NONE  # TODO: Add proper authentication for admin endpoints
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt AdminGetAllFlagsFunction.Arn
+
   # Lambda permissions for API Gateway
   ToggleFlagLambdaPermission:
     Type: AWS::Lambda::Permission
@@ -295,6 +372,14 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TileFlagsAPI}/*/*/*'
 
+  AdminGetAllFlagsLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AdminGetAllFlagsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TileFlagsAPI}/*/*/*'
+
   # API Gateway Deployment
   TileFlagsDeployment:
     Type: AWS::ApiGateway::Deployment
@@ -304,6 +389,8 @@ Resources:
       - ToggleFlagOptionsMethod
       - GetBulkFlagsMethod
       - BulkFlagsOptionsMethod
+      - AdminGetAllFlagsMethod
+      - AdminFlagsOptionsMethod
     Properties:
       RestApiId: !Ref TileFlagsAPI
       StageName: !Ref Environment
@@ -352,6 +439,10 @@ Outputs:
   GetFlagsFunctionName:
     Description: 'Name of the get flags Lambda function'
     Value: !Ref GetFlagsFunction
+
+  AdminGetAllFlagsFunctionName:
+    Description: 'Name of the admin get all flags Lambda function'
+    Value: !Ref AdminGetAllFlagsFunction
 
   APIGatewayURL:
     Description: 'URL of the API Gateway'
