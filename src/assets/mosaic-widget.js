@@ -556,6 +556,11 @@ function setupYearFilterTouchHandlers() {
 }
 
 function loadTooltipImage(tileRegion) {
+    // Don't load tooltip images on mobile devices
+    if (isMobile()) {
+        return;
+    }
+    
     const img = tileRegion.querySelector('.tooltip-image');
     if (img && img.dataset.src && !img.src) {
         console.log('Loading tooltip image for tile');
