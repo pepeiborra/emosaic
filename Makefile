@@ -16,6 +16,7 @@ CROP ?= 1
 FORCE ?= 0
 TILES_DIR ?= /Users/pepe/Library/Mobile Documents/com~apple~CloudDocs/Fotos campo
 S3_BUCKET ?= casadelmanco.com
+DISTRIBUTION_ID ?= E2KW8FQIKWXD1D
 TITLE ?= Casa del Manco
 TIMESTAMP := $(shell date +%Y%m%d%H%M%S)
 DOWNSAMPLE=1
@@ -46,8 +47,15 @@ upload: generate check-deps check-input upload-files
 deploy : upload
 	@echo "Updating index.html"
 	aws s3 cp s3://$(S3_BUCKET)/$(OUTPUT_NAME)_widget.html s3://$(S3_BUCKET)/index.html
+	@echo "Invalidating CloudFront cache..."
+	aws cloudfront create-invalidation \
+  --distribution-id $(DISTRIBUTION_ID) \
+  --paths "/*" \
+  --output table \
+	--no-cli-pager
 	@echo "✅ Successfully generated and uploaded mosaic!"
 	@echo "🌐 Available at: https://$(S3_BUCKET)/"
+
 
 # Generate the mosaic
 generate: $(INPUT_JPG)
