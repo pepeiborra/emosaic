@@ -468,6 +468,37 @@ function adjustMosaicLayout() {
 }
 
 // Adjust layout when image loads and on window resize
+function setupSmartTooltips() {
+    // Only set up for desktop devices
+    if (isMobile()) return;
+    
+    const tileRegions = document.querySelectorAll('.tile-region');
+    tileRegions.forEach(tileRegion => {
+        // Add mouseenter event to position tooltip
+        tileRegion.addEventListener('mouseenter', () => {
+            // Small delay to ensure tooltip content is loaded/rendered
+            setTimeout(() => positionTooltipSmartly(tileRegion), 10);
+        });
+    });
+}
+
+function repositionVisibleTooltips() {
+    // Only for desktop devices
+    if (isMobile()) return;
+    
+    const tileRegions = document.querySelectorAll('.tile-region');
+    tileRegions.forEach(tileRegion => {
+        const tooltip = tileRegion.querySelector('.tooltip');
+        // Check if tooltip is visible (opacity > 0 and visibility not hidden)
+        if (tooltip && 
+            tooltip.style.opacity !== '0' && 
+            tooltip.style.visibility !== 'hidden' &&
+            window.getComputedStyle(tooltip).opacity > 0) {
+            positionTooltipSmartly(tileRegion);
+        }
+    });
+}
+
 window.addEventListener('load', function() {
     console.log('Window loaded, initializing features...');
     attemptHideIOSToolbar();
@@ -475,6 +506,7 @@ window.addEventListener('load', function() {
     setupModalEvents();
     setupYearFilter();
     setupTouchHandlers();
+    setupSmartTooltips();
     
     // Initialize flag system
     window.flagSystem = new TileFlagSystem();
@@ -496,6 +528,9 @@ window.addEventListener('resize', function() {
     // Preserve zoom state after layout adjustment
     if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
         setTimeout(() => applyTransform(false), 10);
+    } else {
+        // Reposition visible tooltips on desktop after resize
+        setTimeout(() => repositionVisibleTooltips(), 10);
     }
     // Reposition year filter after resize
     setTimeout(() => positionYearFilter(), 10);
@@ -561,6 +596,94 @@ function setupYearFilterTouchHandlers() {
     }
 }
 
+function positionTooltipSmartly(tileRegion) {
+    const tooltip = tileRegion.querySelector('.tooltip');
+    if (!tooltip) return;
+
+    // Get viewport dimensions
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    
+    // Get tile region position and dimensions
+    const tileRect = tileRegion.getBoundingClientRect();
+    
+    // Clear any previous max-height constraints
+    tooltip.style.maxHeight = '';
+    tooltip.style.overflowY = '';
+    
+    // Force tooltip to be visible temporarily to measure its dimensions
+    const originalVisibility = tooltip.style.visibility;
+    const originalOpacity = tooltip.style.opacity;
+    const originalDisplay = tooltip.style.display;
+    
+    tooltip.style.visibility = 'hidden';
+    tooltip.style.opacity = '1';
+    tooltip.style.display = 'block';
+    tooltip.style.position = 'absolute';
+    
+    // Wait a moment for content to render (especially images)
+    setTimeout(() => {
+        // Get tooltip dimensions after content is rendered
+        const tooltipRect = tooltip.getBoundingClientRect();
+        let tooltipWidth = tooltipRect.width;
+        let tooltipHeight = tooltipRect.height;
+        
+        // Fallback if dimensions are still 0
+        if (tooltipWidth === 0 || tooltipHeight === 0) {
+            tooltipWidth = tooltip.offsetWidth || 200; // fallback width
+            tooltipHeight = tooltip.offsetHeight || 100; // fallback height
+        }
+        
+        // Reset tooltip visibility
+        tooltip.style.visibility = originalVisibility;
+        tooltip.style.opacity = originalOpacity;
+        
+        // Calculate desired position (default: below and centered)
+        let left = (tileRect.width - tooltipWidth) / 2;
+        let top = tileRect.height + 5; // 5px gap below tile
+        
+        // Check and adjust horizontal positioning
+        const tooltipLeftEdge = tileRect.left + left;
+        const tooltipRightEdge = tooltipLeftEdge + tooltipWidth;
+        
+        if (tooltipRightEdge > viewportWidth - 10) {
+            // Tooltip would go off right edge - align to right edge of tile
+            left = tileRect.width - tooltipWidth;
+        }
+        if (tooltipLeftEdge < 10) {
+            // Tooltip would go off left edge - align to left edge of tile
+            left = 0;
+        }
+        
+        // Ensure tooltip doesn't go beyond left edge of tile or screen
+        left = Math.max(0, Math.min(left, tileRect.width - Math.min(tooltipWidth, tileRect.width)));
+        
+        // Check and adjust vertical positioning
+        const tooltipBottomEdge = tileRect.top + top + tooltipHeight;
+        
+        if (tooltipBottomEdge > viewportHeight - 10) {
+            // Tooltip would go off bottom edge - position above tile instead
+            top = -tooltipHeight - 5; // 5px gap above tile
+            
+            // Double-check if positioning above would go off top edge
+            const tooltipTopEdge = tileRect.top + top;
+            if (tooltipTopEdge < 10) {
+                // If both above and below don't fit, position below but constrain height
+                top = tileRect.height + 5;
+                const availableHeight = viewportHeight - (tileRect.top + top) - 20;
+                if (availableHeight < tooltipHeight && availableHeight > 50) {
+                    tooltip.style.maxHeight = availableHeight + 'px';
+                    tooltip.style.overflowY = 'auto';
+                }
+            }
+        }
+        
+        // Apply positioning
+        tooltip.style.left = left + 'px';
+        tooltip.style.top = top + 'px';
+    }, 0);
+}
+
 function loadTooltipImage(tileRegion) {
     // Don't load tooltip images on mobile devices
     if (isMobile()) {
@@ -573,6 +696,9 @@ function loadTooltipImage(tileRegion) {
         img.src = img.dataset.src;
         img.style.display = 'block';
     }
+    
+    // Position tooltip smartly to avoid screen edges
+    positionTooltipSmartly(tileRegion);
 }
 
 function handleTileClick(imagePath, isWebCompatible, tileElement, tileImageUrl, distanceInfo, dateInfo) {
@@ -718,11 +844,70 @@ function updateYearFilter(sliderValue) {
 // Flag management system
 class TileFlagSystem {
     constructor() {
-        this.apiBase = 'https://api.casadelmanco.com/v1'; // Will be implemented later
+        // API endpoint - will be set after deployment
+        this.apiBase = 'https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod';
         this.flaggedTiles = new Map(); // tileHash -> flagData
         this.rateLimiter = new RateLimiter();
-        this.useLocalStorage = true; // Phase 1: use localStorage
+        this.useLocalStorage = false; // Phase 2: use real API
+        this.fallbackToLocalStorage = true; // Fallback if API fails
+        
+        // Load initial flags
+        this.loadFlags();
+    }
+
+    async loadFlags() {
+        // Try to load from API first, fallback to localStorage
+        if (!this.useLocalStorage) {
+            try {
+                await this.loadFromAPI();
+                return;
+            } catch (error) {
+                console.warn('Failed to load flags from API, falling back to localStorage:', error);
+                if (this.fallbackToLocalStorage) {
+                    this.useLocalStorage = true;
+                }
+            }
+        }
+        
+        // Load from localStorage (fallback or Phase 1)
         this.loadFromLocalStorage();
+    }
+
+    async loadFromAPI() {
+        // Get all tile hashes currently on the page
+        const tileElements = document.querySelectorAll('[data-tile-hash]');
+        const tileHashes = Array.from(tileElements).map(el => el.dataset.tileHash).filter(Boolean);
+        
+        if (tileHashes.length === 0) {
+            console.log('No tiles found on page');
+            return;
+        }
+
+        const response = await fetch(`${this.apiBase}/tiles/flags`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ tileHashes })
+        });
+
+        if (!response.ok) {
+            throw new Error(`API response not ok: ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        // Convert API response to our internal format
+        this.flaggedTiles.clear();
+        Object.entries(data.flags || {}).forEach(([tileHash, flagInfo]) => {
+            this.flaggedTiles.set(tileHash, {
+                tilePath: flagInfo.tilePath,
+                flaggedAt: flagInfo.flaggedAt,
+                flaggedBy: 'anonymous'
+            });
+        });
+
+        console.log('Loaded', this.flaggedTiles.size, 'flags from API');
     }
 
     loadFromLocalStorage() {
@@ -757,22 +942,90 @@ class TileFlagSystem {
                 return;
             }
             
-            this.rateLimiter.consume();
-            this.flaggedTiles.set(tileHash, { 
-                tilePath: tilePath,
-                flaggedAt: new Date().toISOString(),
-                flaggedBy: 'anonymous'
-            });
-            this.showToast('Tile flagged for review');
+            let success = false;
+            
+            if (!this.useLocalStorage) {
+                // Try API first
+                success = await this.flagTileAPI(tileHash, tilePath);
+            }
+            
+            if (success || this.useLocalStorage) {
+                // Update local state
+                this.rateLimiter.consume();
+                this.flaggedTiles.set(tileHash, { 
+                    tilePath: tilePath,
+                    flaggedAt: new Date().toISOString(),
+                    flaggedBy: 'anonymous'
+                });
+                
+                if (this.useLocalStorage) {
+                    this.saveToLocalStorage();
+                }
+                
+                this.showToast('Tile flagged for review');
+            } else {
+                this.showToast('Failed to flag tile. Please try again.');
+                return;
+            }
         } else {
-            // Unflagging a tile  
-            this.flaggedTiles.delete(tileHash);
-            this.showToast('Flag removed');
+            // Unflagging a tile
+            let success = false;
+            
+            if (!this.useLocalStorage) {
+                success = await this.unflagTileAPI(tileHash);
+            }
+            
+            if (success || this.useLocalStorage) {
+                this.flaggedTiles.delete(tileHash);
+                
+                if (this.useLocalStorage) {
+                    this.saveToLocalStorage();
+                }
+                
+                this.showToast('Flag removed');
+            } else {
+                this.showToast('Failed to remove flag. Please try again.');
+                return;
+            }
         }
         
-        this.saveToLocalStorage();
         this.updateFlagUI(tileHash);
         this.updateMobileFlagUI(tileHash);
+    }
+
+    async flagTileAPI(tileHash, tilePath) {
+        try {
+            const response = await fetch(`${this.apiBase}/tiles/${tileHash}/flag`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ tilePath })
+            });
+
+            if (response.status === 429) {
+                this.showToast('Rate limit reached by server');
+                return false;
+            }
+
+            return response.ok;
+        } catch (error) {
+            console.warn('API flag request failed:', error);
+            return false;
+        }
+    }
+
+    async unflagTileAPI(tileHash) {
+        try {
+            const response = await fetch(`${this.apiBase}/tiles/${tileHash}/flag`, {
+                method: 'DELETE',
+            });
+
+            return response.ok;
+        } catch (error) {
+            console.warn('API unflag request failed:', error);
+            return false;
+        }
     }
 
     updateFlagUI(tileHash) {
@@ -893,6 +1146,9 @@ function toggleFlag(tileHash, tilePath) {
 window.toggleDistanceOverlay = toggleDistanceOverlay;
 window.openTileImage = openTileImage;
 window.adjustMosaicLayout = adjustMosaicLayout;
+window.setupSmartTooltips = setupSmartTooltips;
+window.repositionVisibleTooltips = repositionVisibleTooltips;
+window.positionTooltipSmartly = positionTooltipSmartly;
 window.loadTooltipImage = loadTooltipImage;
 window.handleTileClick = handleTileClick;
 window.showMobileModal = showMobileModal;

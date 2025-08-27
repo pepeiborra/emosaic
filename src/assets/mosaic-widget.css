@@ -67,13 +67,14 @@ body {
     border-radius: 4px;
     font-size: 12px;
     white-space: nowrap;
-    pointer-events: none;
+    pointer-events: auto;
     opacity: 0;
-    transition: opacity 0.2s ease;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
     z-index: 1000;
     max-width: 1500px;
     word-wrap: break-word;
     white-space: normal;
+    visibility: hidden;
 }
 .tooltip-image {
     display: block;
@@ -85,8 +86,10 @@ body {
     border-radius: 4px;
     object-fit: contain;
 }
-.tile-region:hover .tooltip {
+.tile-region:hover .tooltip,
+.tooltip:hover {
     opacity: 1;
+    visibility: visible;
 }
 .distance-good { color: #28a745; }
 .distance-medium { color: #ffc107; }
@@ -386,13 +389,17 @@ body {
 
 @media (hover: hover) and (pointer: fine) {
     /* Ensure non-disabled tiles still show tooltips on desktop only */
-    .tile-region:not(.disabled):hover .tooltip {
+    .tile-region:not(.disabled):hover .tooltip,
+    .tile-region:not(.disabled) .tooltip:hover {
         opacity: 1;
+        visibility: visible;
     }
 
     /* Ensure tooltips work on desktop only (devices with hover and fine pointer) */
-    .tile-region:hover .tooltip {
+    .tile-region:hover .tooltip,
+    .tooltip:hover {
         opacity: 1 !important;
+        visibility: visible !important;
     }
 }
 
