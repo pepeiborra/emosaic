@@ -43,7 +43,38 @@ function applyTransform(smooth = false) {
         const transformValue = `translate(${currentPanX}px, ${currentPanY}px) scale(${currentZoom})`;
         console.log('Applying transform:', transformValue, 'smooth:', smooth);
         zoomContainer.style.transform = transformValue;
+        
+        // Update CSS variable to counteract zoom for year filter
+        updateYearFilterScale();
     }
+}
+
+function updateYearFilterScale() {
+    // Position year filter at bottom-right of visible image
+    positionYearFilter();
+}
+
+function positionYearFilter() {
+    const yearFilter = document.querySelector('.year-filter-container.image-positioned');
+    const image = document.querySelector('.mosaic-image');
+    const container = document.querySelector('.mosaic-container');
+    
+    if (!yearFilter || !image || !container) return;
+    
+    // Get the actual rendered position and size of the image
+    const imageRect = image.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    
+    // Calculate position relative to container
+    const rightOffset = 10; // pixels from right edge of image
+    const bottomOffset = 10; // pixels from bottom edge of image
+    
+    // Position at bottom-right of the visible image
+    const left = (imageRect.right - containerRect.left) - yearFilter.offsetWidth - rightOffset;
+    const top = (imageRect.bottom - containerRect.top) - yearFilter.offsetHeight - bottomOffset;
+    
+    yearFilter.style.left = Math.max(0, left) + 'px';
+    yearFilter.style.top = Math.max(0, top) + 'px';
 }
 
 function resetZoom() {
@@ -280,6 +311,8 @@ window.addEventListener('load', function() {
     setupModalEvents();
     setupYearFilter();
     setupTouchHandlers();
+    // Position year filter after everything is loaded
+    setTimeout(() => positionYearFilter(), 100);
     console.log('All features initialized');
 });
 window.addEventListener('resize', function() {
@@ -288,6 +321,8 @@ window.addEventListener('resize', function() {
     if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
         setTimeout(() => applyTransform(false), 10);
     }
+    // Reposition year filter after resize
+    setTimeout(() => positionYearFilter(), 10);
 });
 
 function setupTouchHandlers() {
@@ -296,7 +331,27 @@ function setupTouchHandlers() {
         container.addEventListener('touchstart', handleTouchStart, { passive: false });
         container.addEventListener('touchmove', handleTouchMove, { passive: false });
         container.addEventListener('touchend', handleTouchEnd, { passive: false });
+    }
+    
+    // Setup year filter touch handling
+    setupYearFilterTouchHandlers();
+}
+
+function setupYearFilterTouchHandlers() {
+    const yearSlider = document.getElementById('year-slider');
+    if (yearSlider) {
+        // Prevent year slider touches from bubbling up to image pan/zoom handlers
+        yearSlider.addEventListener('touchstart', function(e) {
+            e.stopPropagation();
+        }, { passive: true });
         
+        yearSlider.addEventListener('touchmove', function(e) {
+            e.stopPropagation();
+        }, { passive: true });
+        
+        yearSlider.addEventListener('touchend', function(e) {
+            e.stopPropagation();
+        }, { passive: true });
     }
 }
 
@@ -435,4 +490,6 @@ window.closeMobileModal = closeMobileModal;
 window.setupYearFilter = setupYearFilter;
 window.updateYearFilter = updateYearFilter;
 window.setupTouchHandlers = setupTouchHandlers;
+window.setupYearFilterTouchHandlers = setupYearFilterTouchHandlers;
+window.positionYearFilter = positionYearFilter;
 window.resetZoom = resetZoom;

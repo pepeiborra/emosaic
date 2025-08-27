@@ -81,6 +81,8 @@ where
             image_width,
             image_height,
             web_compatible,
+            min_year,
+            max_year,
         );
 
         // Generate year filter and mobile modal
@@ -227,6 +229,8 @@ where
         image_width: u32,
         image_height: u32,
         web_compatible: bool,
+        min_year: i32,
+        max_year: i32,
     ) {
         // Find distance range for color coding
         let distances: Vec<f64> = self.tiles().values().map(|t| t.colors.into()).collect();
@@ -357,27 +361,28 @@ where
             ));
         }
 
-        html.push_str("            </div>\n        </div>\n    </div>\n");
-    }
-
-    /// Generate year filter and mobile modal controls
-    fn append_widget_controls(&self, html: &mut String, min_year: i32, max_year: i32) {
-        // Add year filter slider HTML
         html.push_str(&format!(
-            r#"
-    <!-- Year Filter -->
-    <div id="year-filter-container" class="year-filter-container">
-        <label for="year-slider" class="year-filter-label">Filter by Year:</label>
-        <div class="year-slider-wrapper">
-            <input type="range" id="year-slider" class="year-slider"
-                   min="{}" max="{}" value="0" step="1" />
-            <div id="year-display" class="year-display">All Years</div>
+            r#"            </div>
+        </div>
+
+        <!-- Year Filter (positioned dynamically) -->
+        <div id="year-filter-container" class="year-filter-container image-positioned">
+            <label for="year-slider" class="year-filter-label">Year:</label>
+            <div class="year-slider-wrapper">
+                <input type="range" id="year-slider" class="year-slider"
+                       min="{}" max="{}" value="0" step="1" />
+                <div id="year-display" class="year-display">All Years</div>
+            </div>
         </div>
     </div>
 "#,
             min_year,
             max_year + 1
-        )); // +1 for "All" position
+        ));
+    }
+
+    /// Generate mobile modal controls
+    fn append_widget_controls(&self, html: &mut String, _min_year: i32, _max_year: i32) {
         // Add mobile modal HTML
         html.push_str(
             r#"
