@@ -737,6 +737,7 @@ async function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
     const tileHash = tileElement ? tileElement.dataset.tileHash : '';
     const tilePath = tileElement ? tileElement.dataset.tilePath : '';
     window.currentMobileTileHash = tileHash;
+    window.currentMobileTilePath = tilePath; // Store original tile path for fallback
 
     // Base content
     let content = distanceInfo + dateInfo;
@@ -1205,6 +1206,10 @@ class TileFlagSystem {
         const cachedFlag = this.getCachedFlag(tileHash);
         const isFlagged = cachedFlag !== null;
 
+        // Validate and clean tilePath
+        const cleanTilePath = (tilePath && tilePath.trim() !== '') ? tilePath.trim() : '';
+
+
         if (!isFlagged) {
             // Flagging a tile
             if (!this.rateLimiter.canFlag()) {
@@ -1216,14 +1221,14 @@ class TileFlagSystem {
 
             if (!this.useLocalStorage) {
                 // Try API first
-                success = await this.flagTileAPI(tileHash, tilePath);
+                success = await this.flagTileAPI(tileHash, cleanTilePath);
             }
 
             if (success || this.useLocalStorage) {
                 // Update local state immediately
                 this.rateLimiter.consume();
                 const flagData = {
-                    tilePath: tilePath,
+                    tilePath: cleanTilePath,
                     flaggedAt: new Date().toISOString(),
                     flaggedBy: 'anonymous'
                 };
@@ -1337,11 +1342,16 @@ class TileFlagSystem {
                     modalInfo.appendChild(flagContainer);
                 }
 
+                // Use cached flag path if available, otherwise fall back to original tile path
+                const effectiveTilePath = (cachedFlag?.tilePath && cachedFlag.tilePath.trim() !== '')
+                    ? cachedFlag.tilePath
+                    : (window.currentMobileTilePath || '');
+
                 flagContainer.innerHTML = `
                     <div class="flag-status">${isFlagged ?
                         '<div style="color: #ff6b6b; margin: 8px 0;">⚠️ This image has been flagged</div>' : ''}</div>
                     <button class="flag-button mobile-flag-btn"
-                            onclick="window.flagSystem.toggleFlag('${tileHash}', '${cachedFlag?.tilePath || ''}')">
+                            onclick="window.flagSystem.toggleFlag('${tileHash}', '${effectiveTilePath}')">
                         ${isFlagged ? '✓ Flagged' : '🚩 Flag for Review'}
                     </button>
                 `;
