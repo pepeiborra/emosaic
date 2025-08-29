@@ -470,7 +470,7 @@ function adjustMosaicLayout() {
 function setupSmartTooltips() {
     // Only set up for desktop devices
     if (isMobile()) return;
-    
+
     const tileRegions = document.querySelectorAll('.tile-region');
     tileRegions.forEach(tileRegion => {
         // Add mouseenter event to position tooltip
@@ -484,13 +484,13 @@ function setupSmartTooltips() {
 function repositionVisibleTooltips() {
     // Only for desktop devices
     if (isMobile()) return;
-    
+
     const tileRegions = document.querySelectorAll('.tile-region');
     tileRegions.forEach(tileRegion => {
         const tooltip = tileRegion.querySelector('.tooltip');
         // Check if tooltip is visible (opacity > 0 and visibility not hidden)
-        if (tooltip && 
-            tooltip.style.opacity !== '0' && 
+        if (tooltip &&
+            tooltip.style.opacity !== '0' &&
             tooltip.style.visibility !== 'hidden' &&
             window.getComputedStyle(tooltip).opacity > 0) {
             positionTooltipSmartly(tileRegion);
@@ -606,49 +606,49 @@ function positionTooltipSmartly(tileRegion) {
     // Get viewport dimensions
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
-    
+
     // Get tile region position and dimensions
     const tileRect = tileRegion.getBoundingClientRect();
-    
+
     // Clear any previous max-height constraints
     tooltip.style.maxHeight = '';
     tooltip.style.overflowY = '';
-    
+
     // Force tooltip to be visible temporarily to measure its dimensions
     const originalVisibility = tooltip.style.visibility;
     const originalOpacity = tooltip.style.opacity;
     const originalDisplay = tooltip.style.display;
-    
+
     tooltip.style.visibility = 'hidden';
     tooltip.style.opacity = '1';
     tooltip.style.display = 'block';
     tooltip.style.position = 'absolute';
-    
+
     // Wait a moment for content to render (especially images)
     setTimeout(() => {
         // Get tooltip dimensions after content is rendered
         const tooltipRect = tooltip.getBoundingClientRect();
         let tooltipWidth = tooltipRect.width;
         let tooltipHeight = tooltipRect.height;
-        
+
         // Fallback if dimensions are still 0
         if (tooltipWidth === 0 || tooltipHeight === 0) {
             tooltipWidth = tooltip.offsetWidth || 200; // fallback width
             tooltipHeight = tooltip.offsetHeight || 100; // fallback height
         }
-        
+
         // Reset tooltip visibility
         tooltip.style.visibility = originalVisibility;
         tooltip.style.opacity = originalOpacity;
-        
+
         // Calculate desired position (default: below and centered)
         let left = (tileRect.width - tooltipWidth) / 2;
         let top = tileRect.height + 5; // 5px gap below tile
-        
+
         // Check and adjust horizontal positioning
         const tooltipLeftEdge = tileRect.left + left;
         const tooltipRightEdge = tooltipLeftEdge + tooltipWidth;
-        
+
         if (tooltipRightEdge > viewportWidth - 10) {
             // Tooltip would go off right edge - align to right edge of tile
             left = tileRect.width - tooltipWidth;
@@ -657,17 +657,17 @@ function positionTooltipSmartly(tileRegion) {
             // Tooltip would go off left edge - align to left edge of tile
             left = 0;
         }
-        
+
         // Ensure tooltip doesn't go beyond left edge of tile or screen
         left = Math.max(0, Math.min(left, tileRect.width - Math.min(tooltipWidth, tileRect.width)));
-        
+
         // Check and adjust vertical positioning
         const tooltipBottomEdge = tileRect.top + top + tooltipHeight;
-        
+
         if (tooltipBottomEdge > viewportHeight - 10) {
             // Tooltip would go off bottom edge - position above tile instead
             top = -tooltipHeight - 5; // 5px gap above tile
-            
+
             // Double-check if positioning above would go off top edge
             const tooltipTopEdge = tileRect.top + top;
             if (tooltipTopEdge < 10) {
@@ -680,7 +680,7 @@ function positionTooltipSmartly(tileRegion) {
                 }
             }
         }
-        
+
         // Apply positioning
         tooltip.style.left = left + 'px';
         tooltip.style.top = top + 'px';
@@ -710,7 +710,7 @@ async function loadTooltipImage(tileRegion) {
         img.src = img.dataset.src;
         img.style.display = 'block';
     }
-    
+
     // Position tooltip smartly to avoid screen edges
     positionTooltipSmartly(tileRegion);
 }
