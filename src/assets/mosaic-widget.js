@@ -502,7 +502,6 @@ window.addEventListener('load', function() {
     console.log('Window loaded, initializing features...');
     attemptHideIOSToolbar();
     adjustMosaicLayout();
-    setupModalEvents();
     setupYearFilter();
     setupTouchHandlers();
     setupSmartTooltips();
@@ -728,6 +727,7 @@ async function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
     const modal = document.getElementById('mobile-modal');
     const modalImage = document.getElementById('modal-image');
     const modalInfo = document.getElementById('modal-info');
+    setupModalEvents(modal); // Ensure modal events are set up
 
     if (!modal || !modalImage || !modalInfo) return;
 
@@ -791,20 +791,101 @@ function closeMobileModal() {
     const modal = document.getElementById('mobile-modal');
     if (modal) {
         modal.classList.remove('active');
+        // Clear modal content to prevent memory leaks
+        const modalImage = document.getElementById('modal-image');
+        const modalInfo = document.getElementById('modal-info');
+        if (modalImage) {
+            modalImage.src = '';
+        }
+        if (modalInfo) {
+            modalInfo.innerHTML = '';
+        }
+
+        // Clear global modal state
+        window.currentMobileTileHash = null;
+        window.currentMobileTilePath = null;
+
+        // CRITICAL: Clean up passive:false modal event listeners immediately to prevent performance issues
+        cleanupModalEvents(modal);
+
+
         document.body.style.overflow = '';
     }
 }
 
+// Modal event handlers - stored for proper cleanup
+let modalEventHandlers = {
+    click: null,
+    touchstart: null,
+    touchmove: null,
+    touchend: null
+};
+
 // Close modal when clicking outside content
-function setupModalEvents() {
-    const modal = document.getElementById('mobile-modal');
-    if (modal) {
-        modal.addEventListener('click', function(e) {
+function setupModalEvents(modal) {
+        // Clean up any existing event listeners first
+        cleanupModalEvents(modal);
+
+        // Handle click events for closing modal (desktop)
+        modalEventHandlers.click = function(e) {
             if (e.target === modal) {
                 closeMobileModal();
             }
-        });
-    }
+        };
+        modal.addEventListener('click', modalEventHandlers.click);
+
+        modalEventHandlers.touchstart = function(e) {
+            modalTouchStartTime = Date.now();
+            touchStartTarget = e.target;
+            if (e.target === modal) {
+                e.stopPropagation();
+                e.preventDefault(); // Prevent any touch handling on tiles below backdrop
+            }
+        };
+        modal.addEventListener('touchstart', modalEventHandlers.touchstart, { passive: false});
+
+        modalEventHandlers.touchmove = function(e) {
+            if (e.target === modal) {
+                e.stopPropagation();
+                e.preventDefault(); // Prevent scrolling/panning on background
+            }
+        };
+        modal.addEventListener('touchmove', modalEventHandlers.touchmove, { passive: false});
+
+        modalEventHandlers.touchend = function(e) {
+            // Always stop propagation to prevent tile interactions
+            e.stopPropagation();
+            if (e.target === modal) {
+                e.preventDefault(); // Critical: prevent touch from reaching tiles
+                // closeMobileModal(); // Tempting but has misterious performance problems
+            }
+        };
+        modal.addEventListener('touchend', modalEventHandlers.touchend, { passive: false});
+}
+
+// Clean up modal event listeners for performance
+function cleanupModalEvents(modal) {
+        if (modalEventHandlers.click) {
+            modal.removeEventListener('click', modalEventHandlers.click);
+        }
+        if (modalEventHandlers.touchstart) {
+            modal.removeEventListener('touchstart', modalEventHandlers.touchstart);
+        }
+        if (modalEventHandlers.touchmove) {
+            modal.removeEventListener('touchmove', modalEventHandlers.touchmove);
+        }
+        if (modalEventHandlers.touchend) {
+            modal.removeEventListener('touchend', modalEventHandlers.touchend);
+        }
+
+        // Reset handlers
+        modalEventHandlers = {
+            click: null,
+            touchstart: null,
+            touchmove: null,
+            touchend: null
+        };
+
 }
 
 // Year filter functionality
