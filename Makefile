@@ -44,7 +44,9 @@ INPUT_JPG := mosaico/$(FILE)
 # Main target
 upload: generate check-deps check-input upload-files
 
-deploy : upload
+deploy : upload deploy-files
+
+deploy-files:
 	@echo "Updating index.html"
 	aws s3 cp s3://$(S3_BUCKET)/$(OUTPUT_NAME)_widget.html s3://$(S3_BUCKET)/index.html
 	@echo "Invalidating CloudFront cache..."
