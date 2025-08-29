@@ -731,6 +731,8 @@ async function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
     if (!modal || !modalImage || !modalInfo) return;
 
     modalImage.src = imageUrl;
+    modalImage.alt = imageUrl;
+    modalImage.title = imageUrl;
 
     // Get tile hash and path from the tile element
     const tileHash = tileElement ? tileElement.dataset.tileHash : '';

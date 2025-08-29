@@ -172,7 +172,7 @@ body {
     display: block;
     max-width: 100%;
     max-height: 50vh;
-    width: auto;
+    min-width: 400px;
     height: auto;
     margin: 0 auto 15px;
     border-radius: 4px;
