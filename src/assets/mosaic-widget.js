@@ -617,7 +617,6 @@ function positionTooltipSmartly(tileRegion) {
     // Force tooltip to be visible temporarily to measure its dimensions
     const originalVisibility = tooltip.style.visibility;
     const originalOpacity = tooltip.style.opacity;
-    const originalDisplay = tooltip.style.display;
 
     tooltip.style.visibility = 'hidden';
     tooltip.style.opacity = '1';
@@ -1085,7 +1084,17 @@ class TileFlagSystem {
         try {
             const stored = localStorage.getItem('mosaic-flags');
             if (stored) {
-                const data = JSON.parse(stored);
+                let data;
+                try {
+                    data = JSON.parse(stored);
+                } catch (parseError) {
+                    console.error('Failed to parse localStorage flags JSON:', parseError);
+                    console.error('Unparseable JSON content:', stored);
+                    console.warn('Clearing corrupted localStorage flags data');
+                    localStorage.removeItem('mosaic-flags');
+                    return;
+                }
+
                 // Convert old format to TTL cache format
                 Object.entries(data).forEach(([tileHash, flagData]) => {
                     this.setCachedFlag(tileHash, flagData);
@@ -1106,9 +1115,22 @@ class TileFlagSystem {
                     data[tileHash] = cacheEntry.data;
                 }
             });
-            localStorage.setItem('mosaic-flags', JSON.stringify(data));
+
+            let jsonString;
+            try {
+                jsonString = JSON.stringify(data);
+            } catch (stringifyError) {
+                console.error('Failed to stringify flags data for localStorage:', stringifyError);
+                console.error('Problematic data object:', data);
+                return;
+            }
+
+            localStorage.setItem('mosaic-flags', jsonString);
         } catch (error) {
             console.warn('Failed to save flags to localStorage:', error);
+            if (error.name === 'QuotaExceededError') {
+                console.warn('localStorage quota exceeded. Consider clearing old data.');
+            }
         }
     }
 
@@ -1116,13 +1138,21 @@ class TileFlagSystem {
         // Check if there are flags in localStorage to migrate
         const stored = localStorage.getItem('mosaic-flags');
         if (!stored) {
-            // No flags to migrate, mark as attempted
-            localStorage.setItem('mosaic-flags-migration-attempted', 'true');
+            return;
+        }
+
+        let localFlags;
+        try {
+            localFlags = JSON.parse(stored);
+        } catch (parseError) {
+            console.error('Failed to parse localStorage flags JSON during migration:', parseError);
+            console.error('Unparseable JSON content:', stored);
+            console.warn('Clearing corrupted localStorage flags data to prevent future migration attempts');
+            localStorage.removeItem('mosaic-flags');
             return;
         }
 
         try {
-            const localFlags = JSON.parse(stored);
             const flagCount = Object.keys(localFlags).length;
 
             if (flagCount === 0) {
@@ -1193,13 +1223,6 @@ class TileFlagSystem {
             console.error('Error during localStorage migration:', error);
             this.showToast('⚠️ Flag migration failed (keeping local copy)');
         }
-    }
-
-    // Manual migration trigger (for testing or user-initiated migration)
-    async forceMigration() {
-        // Reset migration flag to allow re-migration
-        localStorage.removeItem('mosaic-flags-migration-attempted');
-        await this.migrateFromLocalStorageIfNeeded();
     }
 
     async toggleFlag(tileHash, tilePath) {
