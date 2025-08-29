@@ -65,7 +65,6 @@ function calculateMinZoom() {
     const image = document.querySelector('.mosaic-image');
     const container = document.querySelector('.mosaic-container');
 
-    console.log('calculateMinZoom called');
 
     if (!isMobile()) {
         return 0.1; // Very low value for desktop, effectively no limit
@@ -80,8 +79,6 @@ function calculateMinZoom() {
     }
 
     const containerRect = container.getBoundingClientRect();
-
-    console.log('Container dimensions:', containerRect.width, 'x', containerRect.height);
 
     // On mobile, image renders at 1:1 scale (natural size)
     // Calculate what zoom would make the image fit entirely in the container
@@ -137,9 +134,6 @@ function constrainPan() {
     const scaledImageWidth = image.naturalWidth * currentZoom;
     const scaledImageHeight = image.naturalHeight * currentZoom;
 
-    console.log('Pan constraint - Container:', containerRect.width, 'x', containerRect.height);
-    console.log('Pan constraint - Scaled image:', scaledImageWidth, 'x', scaledImageHeight);
-
     let constrainedPanX = currentPanX;
     let constrainedPanY = currentPanY;
 
@@ -149,11 +143,9 @@ function constrainPan() {
         const maxPanX = (scaledImageWidth - containerRect.width) / 2;
         const minPanX = -maxPanX;
         constrainedPanX = Math.min(maxPanX, Math.max(minPanX, currentPanX));
-        console.log('Horizontal constraint - Min:', minPanX, 'Max:', maxPanX, 'Current:', currentPanX, 'Constrained:', constrainedPanX);
     } else {
         // Image is narrower than container - center it
         constrainedPanX = 0;
-        console.log('Image narrower than container - centering horizontally');
     }
 
     // Constrain vertical pan
@@ -162,16 +154,13 @@ function constrainPan() {
         const maxPanY = (scaledImageHeight - containerRect.height) / 2;
         const minPanY = -maxPanY;
         constrainedPanY = Math.min(maxPanY, Math.max(minPanY, currentPanY));
-        console.log('Vertical constraint - Min:', minPanY, 'Max:', maxPanY, 'Current:', currentPanY, 'Constrained:', constrainedPanY);
     } else {
         // Image is shorter than container - center it
         constrainedPanY = 0;
-        console.log('Image shorter than container - centering vertically');
     }
 
     // Update pan values if they were constrained
     if (constrainedPanX !== currentPanX || constrainedPanY !== currentPanY) {
-        console.log('Pan constrained from:', currentPanX, currentPanY, 'to:', constrainedPanX, constrainedPanY);
         currentPanX = constrainedPanX;
         currentPanY = constrainedPanY;
     }
@@ -192,7 +181,6 @@ function applyTransform(smooth = false) {
             zoomContainer.classList.remove('smooth-transition');
         }
         const transformValue = `translate(${currentPanX}px, ${currentPanY}px) scale(${currentZoom})`;
-        console.log('Applying transform:', transformValue, 'smooth:', smooth);
         zoomContainer.style.transform = transformValue;
 
         // Update CSS variable to counteract zoom for year filter
