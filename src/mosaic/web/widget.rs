@@ -424,6 +424,17 @@ where
             <div id="modal-info" class="modal-info"></div>
         </div>
     </div>
+
+    <!-- Admin Panel -->
+    <div id="admin-pane" class="admin-pane">
+        <h3>🔧 Admin Panel</h3>
+        <button id="toggle-highlights-btn" class="admin-button" onclick="window.toggleHighlights()">
+            Show Flagged Tiles
+        </button>
+        <div id="admin-status" class="admin-status">
+            Admin mode enabled. Click to show/hide flagged tiles.
+        </div>
+    </div>
 "#,
         );
     }

@@ -497,6 +497,9 @@ window.addEventListener('load', function() {
     // Initialize flag system
     window.flagSystem = new TileFlagSystem();
 
+    // Initialize admin pane
+    initializeAdminPane();
+
     // Update minimum zoom after everything is loaded
     setTimeout(() => {
         if (isMobile()) {
@@ -521,6 +524,11 @@ window.addEventListener('resize', function() {
     } else {
         // Reposition visible tooltips on desktop after resize
         setTimeout(() => repositionVisibleTooltips(), 10);
+    }
+    
+    // Update admin panel highlights after resize
+    if (typeof updateHighlights === 'function') {
+        setTimeout(() => updateHighlights(), 10);
     }
 });
 
@@ -1461,3 +1469,161 @@ window.updateMinZoom = updateMinZoom;
 window.initializeMobileZoom = initializeMobileZoom;
 window.constrainPan = constrainPan;
 window.attemptHideIOSToolbar = attemptHideIOSToolbar;
+
+// Admin pane functionality
+let isAdminMode = false;
+let flaggedTiles = new Map();
+let highlightOverlays = [];
+let highlightsVisible = false;
+let flagsLoaded = false;
+
+function initializeAdminPane() {
+    // Check URL parameter for admin mode
+    const urlParams = new URLSearchParams(window.location.search);
+    isAdminMode = urlParams.get('admin') === '1';
+    
+    if (isAdminMode) {
+        const adminPane = document.getElementById('admin-pane');
+        if (adminPane) {
+            adminPane.classList.add('visible');
+        }
+        console.log('Admin mode activated');
+    }
+}
+
+async function toggleHighlights() {
+    const toggleBtn = document.getElementById('toggle-highlights-btn');
+    const statusDiv = document.getElementById('admin-status');
+    
+    if (!toggleBtn || !statusDiv) return;
+    
+    if (highlightsVisible) {
+        // Hide highlights
+        clearHighlights();
+        highlightsVisible = false;
+        toggleBtn.textContent = 'Show Flagged Tiles';
+        toggleBtn.classList.remove('active');
+        statusDiv.innerHTML = flagsLoaded ? `Found ${flaggedTiles.size} flagged tiles` : 'Admin mode enabled. Click to show/hide flagged tiles.';
+    } else {
+        // Show highlights - load flags first if not already loaded
+        if (!flagsLoaded) {
+            toggleBtn.disabled = true;
+            statusDiv.innerHTML = 'Loading flagged tiles...';
+            
+            try {
+                await loadFlaggedTiles();
+                flagsLoaded = true;
+            } catch (error) {
+                console.error('Error loading flagged tiles:', error);
+                statusDiv.innerHTML = `Error loading flagged tiles: ${error.message}`;
+                toggleBtn.disabled = false;
+                return;
+            }
+            
+            toggleBtn.disabled = false;
+        }
+        
+        // Show highlights
+        showHighlights();
+        highlightsVisible = true;
+        toggleBtn.textContent = 'Hide Flagged Tiles';
+        toggleBtn.classList.add('active');
+    }
+}
+
+async function loadFlaggedTiles() {
+    try {
+        // Use the admin API endpoint to fetch all flagged tiles
+        const response = await fetch('https://lm86ri8yyk.execute-api.us-east-1.amazonaws.com/prod/admin/flags?limit=1000');
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success && data.flags) {
+            flaggedTiles.clear();
+            data.flags.forEach(flag => {
+                if (flag.tileHash) {
+                    flaggedTiles.set(flag.tileHash, flag);
+                }
+            });
+            
+            console.log('Loaded flagged tiles:', flaggedTiles.size);
+        } else {
+            throw new Error(data.error || 'Failed to fetch flagged tiles');
+        }
+    } catch (error) {
+        throw error; // Re-throw to be handled by caller
+    }
+}
+
+function showHighlights() {
+    // Clear existing highlights first
+    clearHighlights();
+
+    let highlightCount = 0;
+    
+    // Find tiles that match our flagged tile hashes
+    flaggedTiles.forEach((flagData, tileHash) => {
+        const tileElement = document.querySelector(`[data-tile-hash="${tileHash}"]`);
+        if (tileElement) {
+            // Create highlight element that fills the entire tile
+            const highlight = document.createElement('div');
+            highlight.className = 'flag-highlight';
+            highlight.style.cssText = `
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                border: 3px solid #ff0000;
+                box-shadow: 0 0 10px rgba(255, 0, 0, 0.5);
+                pointer-events: none;
+                z-index: 1000;
+            `;
+            highlight.title = `Flagged tile: ${flagData.tilePath || 'Unknown path'}`;
+            
+            // Inject the highlight directly into the existing tile div
+            tileElement.appendChild(highlight);
+            highlightOverlays.push(highlight);
+            highlightCount++;
+        }
+    });
+
+    const statusDiv = document.getElementById('admin-status');
+    if (statusDiv) {
+        statusDiv.innerHTML = `Showing ${highlightCount} of ${flaggedTiles.size} flagged tiles`;
+    }
+    
+    console.log(`Highlighted ${highlightCount} flagged tiles`);
+}
+
+function clearHighlights() {
+    highlightOverlays.forEach(highlight => {
+        if (highlight.parentNode) {
+            highlight.parentNode.removeChild(highlight);
+        }
+    });
+    highlightOverlays = [];
+}
+
+// Update highlights when content changes (e.g., after zoom/pan/resize)
+function updateHighlights() {
+    if (highlightsVisible) {
+        // Highlights are now embedded in tile divs, so they automatically
+        // transform with the zoom container. No need to reposition.
+        // Only refresh if highlights were cleared or if we need to re-inject them
+        if (highlightOverlays.length === 0) {
+            showHighlights();
+        }
+    }
+}
+
+// Make admin functions and data globally accessible
+window.initializeAdminPane = initializeAdminPane;
+window.toggleHighlights = toggleHighlights;
+window.updateHighlights = updateHighlights;
+window.flaggedTiles = flaggedTiles;
+window.highlightOverlays = highlightOverlays;
