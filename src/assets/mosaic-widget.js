@@ -3,7 +3,7 @@ function isMobile() {
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
            ('ontouchstart' in window) ||
            (navigator.maxTouchPoints > 0);
-}
+};
 
 // Attempt to hide Safari toolbar on iOS
 function attemptHideIOSToolbar() {
@@ -13,7 +13,7 @@ function attemptHideIOSToolbar() {
         // Method 1: Scroll trick to hide address bar
         setTimeout(() => {
             window.scrollTo(0, 1);
-        }, 100);
+        }, TOOLBAR_HIDE_DELAY);
 
         // Method 2: Request fullscreen if supported
         if (document.documentElement.requestFullscreen) {
@@ -33,7 +33,26 @@ function attemptHideIOSToolbar() {
             console.log('Tip: Add to Home Screen for full-screen experience');
         }
     }
-}
+};
+
+// Constants
+const TOOLBAR_HIDE_DELAY = 100;
+const DESKTOP_MIN_ZOOM = 0.1;
+const SCALE_BUFFER = 0.95;
+const TOOLTIP_GAP = 5;
+const ZOOM_THRESHOLD = 0.02;
+const WAS_ZOOMING_TIMEOUT = 1000;
+const MOBILE_ZOOM_TIMEOUT = 100;
+const POSITIONING_RETRY_DELAY = 50;
+const LAYOUT_ADJUSTMENT_DELAY = 10;
+const ORIENTATION_CHANGE_DELAY = 150;
+const ORIENTATION_POSITIONING_DELAY = 100;
+const ORIENTATION_POSITIONING_RETRY_DELAY = 300;
+const TOAST_DURATION = 3000;
+const CACHE_TTL = 10 * 1000; // 10 seconds TTL for real-time behavior
+const RATE_LIMIT_MAX_FLAGS = 10;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+const MAX_ZOOM = 5;
 
 // Zoom and pan state
 let currentZoom = 1;
@@ -45,7 +64,6 @@ let isPanning = false;
 let isZooming = false;
 let wasZooming = false;
 let minZoom = 0.5; // Will be updated based on image fit
-const maxZoom = 5;
 
 // Touch handling for zoom and pan
 function getTouchDistance(touch1, touch2) {
@@ -67,7 +85,7 @@ function calculateMinZoom() {
 
 
     if (!isMobile()) {
-        return 0.1; // Very low value for desktop, effectively no limit
+        return DESKTOP_MIN_ZOOM; // Very low value for desktop, effectively no limit
     }
 
     if (!image || !container) {
@@ -89,7 +107,7 @@ function calculateMinZoom() {
     const scaleToFit = Math.min(scaleToFitWidth, scaleToFitHeight);
 
     // Add small buffer to ensure image fits completely, but don't exceed 1.0
-    const minZoomValue = Math.min(scaleToFit * 0.95, 1);
+    const minZoomValue = Math.min(scaleToFit * SCALE_BUFFER, 1);
 
     return minZoomValue;
 }
@@ -208,7 +226,7 @@ function positionYearFilter() {
     // Wait for image to be fully loaded and rendered
     if (image.naturalWidth === 0 || image.naturalHeight === 0) {
         console.log('Year filter positioning skipped - image not loaded');
-        setTimeout(() => positionYearFilter(), 50);
+        setTimeout(() => positionYearFilter(), POSITIONING_RETRY_DELAY);
         return;
     }
 
@@ -220,7 +238,7 @@ function positionYearFilter() {
     if (imageRect.width === 0 || imageRect.height === 0 ||
         containerRect.width === 0 || containerRect.height === 0) {
         console.log('Year filter positioning skipped - invalid dimensions');
-        setTimeout(() => positionYearFilter(), 50);
+        setTimeout(() => positionYearFilter(), POSITIONING_RETRY_DELAY);
         return;
     }
 
@@ -254,7 +272,7 @@ function resetZoom() {
     currentPanX = 0;
     currentPanY = 0;
     applyTransform(true); // Use smooth transition for reset
-}
+};
 
 function handleTouchStart(e) {
     if (e.touches.length === 1) {
@@ -269,7 +287,7 @@ function handleTouchStart(e) {
         lastTouchDistance = getTouchDistance(e.touches[0], e.touches[1]);
         lastTouchCenter = getTouchCenter(e.touches[0], e.touches[1]);
     }
-}
+};
 
 function handleTouchMove(e) {
     if (e.touches.length === 1 && isPanning && !isZooming) {
@@ -298,10 +316,10 @@ function handleTouchMove(e) {
             let newZoom;
             if (isMobile()) {
                 // Mobile: enforce both min and max zoom
-                newZoom = Math.min(maxZoom, Math.max(minZoom, proposedZoom));
+                newZoom = Math.min(MAX_ZOOM, Math.max(minZoom, proposedZoom));
             } else {
                 // Desktop: only enforce max zoom, no minimum
-                newZoom = Math.min(maxZoom, proposedZoom);
+                newZoom = Math.min(MAX_ZOOM, proposedZoom);
             }
 
             // Zoom towards the center of the pinch
@@ -320,7 +338,7 @@ function handleTouchMove(e) {
             currentPanY = zoomPointY + (currentPanY - zoomPointY) * zoomRatio;
 
             // Mark that we're actively zooming if there's significant change
-            if (Math.abs(zoomDelta - 1) > 0.02) {
+            if (Math.abs(zoomDelta - 1) > ZOOM_THRESHOLD) {
                 wasZooming = true;
             }
 
@@ -332,7 +350,7 @@ function handleTouchMove(e) {
         lastTouchCenter = touchCenter;
         applyTransform(false); // No transition during active zoom
     }
-}
+};
 
 function handleTouchEnd(e) {
     console.log('TouchEnd - touches remaining:', e.touches.length, 'zoom:', currentZoom, 'wasZooming:', wasZooming);
@@ -349,10 +367,10 @@ function handleTouchEnd(e) {
         // Set a flag to prevent any automatic resets
         setTimeout(() => {
             console.log('Zoom state after timeout:', currentZoom, 'transform:', document.querySelector('.zoom-container').style.transform);
-        }, 100);
+        }, MOBILE_ZOOM_TIMEOUT);
 
         // Clear wasZooming after delay
-        setTimeout(() => { wasZooming = false; }, 1000);
+        setTimeout(() => { wasZooming = false; }, WAS_ZOOMING_TIMEOUT);
     } else if (e.touches.length === 1) {
         // Transition from zoom to pan
         isZooming = false;
@@ -360,7 +378,7 @@ function handleTouchEnd(e) {
         lastTouchCenter = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         lastTouchDistance = 0;
     }
-}
+};
 
 function toggleDistanceOverlay() {
     const overlay = document.getElementById('distance-overlay');
@@ -375,7 +393,7 @@ function toggleDistanceOverlay() {
             visible: isVisible
         }, '*');
     }
-}
+};
 
 function openTileImage(imagePath, isWebCompatible) {
     if (isWebCompatible) {
@@ -464,10 +482,10 @@ function setupSmartTooltips() {
         // Add mouseenter event to position tooltip
         tileRegion.addEventListener('mouseenter', () => {
             // Small delay to ensure tooltip content is loaded/rendered
-            setTimeout(() => positionTooltipSmartly(tileRegion), 10);
+            setTimeout(() => positionTooltipSmartly(tileRegion), LAYOUT_ADJUSTMENT_DELAY);
         });
     });
-}
+};
 
 function repositionVisibleTooltips() {
     // Only for desktop devices
@@ -484,7 +502,7 @@ function repositionVisibleTooltips() {
             positionTooltipSmartly(tileRegion);
         }
     });
-}
+};
 
 window.addEventListener('load', function() {
     console.log('Window loaded, initializing features...');
@@ -507,7 +525,7 @@ window.addEventListener('load', function() {
             initializeMobileZoom();
             positionYearFilter();
         }
-    }, 100);
+    }, MOBILE_ZOOM_TIMEOUT);
     console.log('All features initialized');
 });
 window.addEventListener('resize', function() {
@@ -517,18 +535,18 @@ window.addEventListener('resize', function() {
         updateMinZoom();
         // Preserve zoom state after layout adjustment
         if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
-            setTimeout(() => applyTransform(false), 10);
+            setTimeout(() => applyTransform(false), LAYOUT_ADJUSTMENT_DELAY);
         }
         // Reposition year filter after resize
-        setTimeout(() => positionYearFilter(), 10);
+        setTimeout(() => positionYearFilter(), LAYOUT_ADJUSTMENT_DELAY);
     } else {
         // Reposition visible tooltips on desktop after resize
-        setTimeout(() => repositionVisibleTooltips(), 10);
+        setTimeout(() => repositionVisibleTooltips(), LAYOUT_ADJUSTMENT_DELAY);
     }
     
     // Update admin panel highlights after resize
     if (typeof updateHighlights === 'function') {
-        setTimeout(() => updateHighlights(), 10);
+        setTimeout(() => updateHighlights(), LAYOUT_ADJUSTMENT_DELAY);
     }
 });
 
@@ -545,16 +563,16 @@ function handleOrientationChange() {
             // On mobile, reinitialize to minimum zoom after orientation change
             initializeMobileZoom();
             // Reposition year filter after orientation change with additional delay
-            setTimeout(() => positionYearFilter(), 100);
+            setTimeout(() => positionYearFilter(), ORIENTATION_POSITIONING_DELAY);
             // Additional positioning attempt for stubborn cases
-            setTimeout(() => positionYearFilter(), 300);
+            setTimeout(() => positionYearFilter(), ORIENTATION_POSITIONING_RETRY_DELAY);
         } else {
             // Preserve zoom state after orientation change (only for desktop)
             if (currentZoom !== 1 || currentPanX !== 0 || currentPanY !== 0) {
-                setTimeout(() => applyTransform(false), 50);
+                setTimeout(() => applyTransform(false), POSITIONING_RETRY_DELAY);
             }
         }
-    }, 150);
+    }, ORIENTATION_CHANGE_DELAY);
 }
 
 // Handle orientation changes specifically
@@ -575,7 +593,7 @@ function setupTouchHandlers() {
 
     // Setup year filter touch handling
     setupYearFilterTouchHandlers();
-}
+};
 
 function setupYearFilterTouchHandlers() {
     const yearSlider = document.getElementById('year-slider');
@@ -593,7 +611,7 @@ function setupYearFilterTouchHandlers() {
             e.stopPropagation();
         }, { passive: true });
     }
-}
+};
 
 function positionTooltipSmartly(tileRegion) {
     const tooltip = tileRegion.querySelector('.tooltip');
@@ -912,7 +930,7 @@ function setupYearFilter() {
         console.log('Slider value changed to:', value);
         updateYearFilter(value);
     });
-}
+};
 
 function updateYearFilter(sliderValue) {
     const display = document.getElementById('year-display');
@@ -956,7 +974,7 @@ function updateYearFilter(sliderValue) {
 
         console.log('Year filter results - Enabled:', enabledCount, 'Disabled:', disabledCount);
     }
-}
+};
 
 // Flag management system
 class TileFlagSystem {
@@ -968,7 +986,7 @@ class TileFlagSystem {
         this.rateLimiter = new RateLimiter();
         this.useLocalStorage = false; // Phase 2: use real API
         this.fallbackToLocalStorage = true; // Fallback if API fails
-        this.CACHE_TTL = 10 * 1000; // 10 seconds TTL for real-time behavior
+        this.CACHE_TTL = CACHE_TTL;
 
         // Check for localStorage migration but don't load all flags upfront
         this.handleInitialSetup();
@@ -1404,15 +1422,15 @@ class TileFlagSystem {
             font-size: 14px;
         `;
         document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 3000);
+        setTimeout(() => toast.remove(), TOAST_DURATION);
     }
 }
 
 // Rate limiter for anonymous flagging (10 flags per minute)
 class RateLimiter {
     constructor() {
-        this.maxFlags = 10;
-        this.windowMs = 60 * 1000; // 1 minute
+        this.maxFlags = RATE_LIMIT_MAX_FLAGS;
+        this.windowMs = RATE_LIMIT_WINDOW_MS;
         this.flags = [];
     }
 
@@ -1445,7 +1463,7 @@ function toggleFlag(tileHash, tilePath) {
     } else {
         console.warn('Flag system not initialized');
     }
-}
+};
 
 // Make functions globally accessible
 window.toggleDistanceOverlay = toggleDistanceOverlay;
@@ -1489,7 +1507,7 @@ function initializeAdminPane() {
         }
         console.log('Admin mode activated');
     }
-}
+};
 
 async function toggleHighlights() {
     const toggleBtn = document.getElementById('toggle-highlights-btn');
@@ -1607,7 +1625,7 @@ function clearHighlights() {
         }
     });
     highlightOverlays = [];
-}
+};
 
 // Update highlights when content changes (e.g., after zoom/pan/resize)
 function updateHighlights() {
@@ -1619,7 +1637,7 @@ function updateHighlights() {
             showHighlights();
         }
     }
-}
+};
 
 // Make admin functions and data globally accessible
 window.initializeAdminPane = initializeAdminPane;
