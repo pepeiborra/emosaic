@@ -980,7 +980,7 @@ function updateYearFilter(sliderValue) {
 class TileFlagSystem {
     constructor() {
         // API endpoint - will be set after deployment
-        this.apiBase = 'https://lm86ri8yyk.execute-api.us-east-1.amazonaws.com/prod';
+        this.apiBase = 'https://sa4boithuf.execute-api.us-east-1.amazonaws.com/prod';
         this.flaggedTiles = new Map(); // tileHash -> cached flagData with TTL
         this.pendingRequests = new Map(); // Track in-flight requests
         this.rateLimiter = new RateLimiter();
@@ -1552,7 +1552,7 @@ async function toggleHighlights() {
 async function loadFlaggedTiles() {
     try {
         // Use the admin API endpoint to fetch all flagged tiles
-        const response = await fetch('https://lm86ri8yyk.execute-api.us-east-1.amazonaws.com/prod/admin/flags?limit=1000');
+        const response = await fetch('https://sa4boithuf.execute-api.us-east-1.amazonaws.com/prod/admin/flags?limit=1000');
         
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
