@@ -1,0 +1,355 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Emosaic Cloud Migration - Core Infrastructure (S3, DynamoDB, Cognito)'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'prod'
+    Description: Environment name
+
+  AdminEmail:
+    Type: String
+    Description: Email address for the initial admin user
+
+  CorsOrigin:
+    Type: String
+    Default: 'https://casadelmanco.com'
+    Description: Primary CORS origin for API Gateway
+
+  AdditionalCorsOrigins:
+    Type: CommaDelimitedList
+    Default: 'https://rc.casadelmanco.com'
+    Description: Additional CORS origins (comma-separated)
+
+Resources:
+  #############################################################################
+  # S3 Bucket for Tile Storage
+  #############################################################################
+  TilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'emosaic-tiles-${Environment}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+              - HEAD
+            AllowedOrigins:
+              - !Ref CorsOrigin
+              - !Select [0, !Ref AdditionalCorsOrigins]
+            MaxAge: 3600
+      Tags:
+        - Key: Project
+          Value: Emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
+  TilesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TilesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontAccess
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${TilesBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/*'
+
+  #############################################################################
+  # DynamoDB Tables
+  #############################################################################
+
+  # Mosaics table - stores mosaic metadata
+  MosaicsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${Environment}-mosaics'
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: created_at
+          AttributeType: S
+        - AttributeName: is_main
+          AttributeType: N
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: by-created-at
+          KeySchema:
+            - AttributeName: is_main
+              KeyType: HASH
+            - AttributeName: created_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: Emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Jobs table - tracks mosaic generation jobs
+  JobsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${Environment}-mosaic-jobs'
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: mosaic_id
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: started_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: by-mosaic-id
+          KeySchema:
+            - AttributeName: mosaic_id
+              KeyType: HASH
+            - AttributeName: started_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: by-status
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: started_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: Emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
+  #############################################################################
+  # Cognito User Pool for Admin Authentication
+  #############################################################################
+
+  AdminUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${Environment}-emosaic-admin-pool'
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      MfaConfiguration: 'OFF'
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+        InviteMessageTemplate:
+          EmailMessage: |
+            You have been invited to the Emosaic Admin Panel.
+
+            Your temporary password is: {####}
+
+            Please log in at https://casadelmanco.com/admin and change your password.
+          EmailSubject: 'Emosaic Admin Invitation'
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+      UserPoolTags:
+        Project: Emosaic
+        Environment: !Ref Environment
+
+  AdminUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub '${Environment}-emosaic-admin-client'
+      UserPoolId: !Ref AdminUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      PreventUserExistenceErrors: ENABLED
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      SupportedIdentityProviders:
+        - COGNITO
+
+  # Create initial admin user
+  AdminUser:
+    Type: AWS::Cognito::UserPoolUser
+    Properties:
+      UserPoolId: !Ref AdminUserPool
+      Username: !Ref AdminEmail
+      UserAttributes:
+        - Name: email
+          Value: !Ref AdminEmail
+        - Name: email_verified
+          Value: 'true'
+      DesiredDeliveryMediums:
+        - EMAIL
+
+  #############################################################################
+  # IAM Role for Mosaic Lambda Functions
+  #############################################################################
+
+  MosaicLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-mosaic-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt MosaicsTable.Arn
+                  - !Sub '${MosaicsTable.Arn}/index/*'
+                  - !GetAtt JobsTable.Arn
+                  - !Sub '${JobsTable.Arn}/index/*'
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt TilesBucket.Arn
+                  - !Sub '${TilesBucket.Arn}/*'
+        - PolicyName: BatchSubmitJob
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - batch:SubmitJob
+                  - batch:DescribeJobs
+                  - batch:TerminateJob
+                Resource: '*'
+
+Outputs:
+  TilesBucketName:
+    Description: Name of the tiles S3 bucket
+    Value: !Ref TilesBucket
+    Export:
+      Name: !Sub '${Environment}-emosaic-tiles-bucket'
+
+  TilesBucketArn:
+    Description: ARN of the tiles S3 bucket
+    Value: !GetAtt TilesBucket.Arn
+    Export:
+      Name: !Sub '${Environment}-emosaic-tiles-bucket-arn'
+
+  MosaicsTableName:
+    Description: Name of the mosaics DynamoDB table
+    Value: !Ref MosaicsTable
+    Export:
+      Name: !Sub '${Environment}-mosaics-table'
+
+  MosaicsTableArn:
+    Description: ARN of the mosaics DynamoDB table
+    Value: !GetAtt MosaicsTable.Arn
+    Export:
+      Name: !Sub '${Environment}-mosaics-table-arn'
+
+  JobsTableName:
+    Description: Name of the jobs DynamoDB table
+    Value: !Ref JobsTable
+    Export:
+      Name: !Sub '${Environment}-mosaic-jobs-table'
+
+  JobsTableArn:
+    Description: ARN of the jobs DynamoDB table
+    Value: !GetAtt JobsTable.Arn
+    Export:
+      Name: !Sub '${Environment}-mosaic-jobs-table-arn'
+
+  UserPoolId:
+    Description: ID of the Cognito User Pool
+    Value: !Ref AdminUserPool
+    Export:
+      Name: !Sub '${Environment}-emosaic-user-pool-id'
+
+  UserPoolArn:
+    Description: ARN of the Cognito User Pool
+    Value: !GetAtt AdminUserPool.Arn
+    Export:
+      Name: !Sub '${Environment}-emosaic-user-pool-arn'
+
+  UserPoolClientId:
+    Description: ID of the Cognito User Pool Client
+    Value: !Ref AdminUserPoolClient
+    Export:
+      Name: !Sub '${Environment}-emosaic-user-pool-client-id'
+
+  MosaicLambdaRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt MosaicLambdaRole.Arn
+    Export:
+      Name: !Sub '${Environment}-mosaic-lambda-role-arn'
