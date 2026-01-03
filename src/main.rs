@@ -5,7 +5,7 @@ mod mosaic;
 use image::imageops::FilterType;
 use mosaic::error::{ImageError, RenderError};
 use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs::create_dir_all;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -412,12 +412,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     n_to_1::<16384>(args, &img, tile_size, crop, mode, tint_opacity as f32)
                 }
                 Mode::Random => {
+                    let extensions: HashSet<String> =
+                        args.extensions.iter().map(|x| x.to_lowercase()).collect();
                     let images = find_images(&args.tiles_dir, |ext| {
-                        args.extensions.contains(&ext.to_string_lossy().to_string())
+                        ext.to_str()
+                            .map(|s| extensions.contains(&s.to_lowercase()))
+                            .unwrap_or(false)
                     });
                     let mut tile_set = TileSet::<()>::new();
-                    let extensions: HashSet<String> =
-                        args.extensions.iter().map(|x| x.to_owned()).collect();
                     for path_buf in images.map_err(|e| {
                         format!(
                             "Failed to find images in {}: {}",
@@ -427,7 +429,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })? {
                         if let Some(ext) = path_buf.extension() {
                             if let Some(ext_str) = ext.to_str() {
-                                if extensions.contains(ext_str) && path_buf.exists() {
+                                if extensions.contains(&ext_str.to_lowercase()) && path_buf.exists() {
                                     tile_set.push_tile(path_buf, ());
                                 }
                             }
@@ -629,7 +631,7 @@ where
         eprintln!("Invalid tile size: Tile size must be divisible by {}", dim);
         std::process::exit(1);
     }
-    let extensions: HashSet<_> = extensions.iter().map(|x| x.to_owned()).collect();
+    let extensions: HashSet<_> = extensions.iter().map(|x| x.to_lowercase()).collect();
     let tile_set = if force {
         None
     } else {
@@ -645,8 +647,8 @@ where
                 .par_iter()
                 .filter_map(|tile| {
                     let path = analysis.get_path(tile);
-                    let extension = path.extension()?.to_str()?;
-                    if path.exists() && extensions.contains(extension) {
+                    let extension = path.extension()?.to_str()?.to_lowercase();
+                    if path.exists() && extensions.contains(&extension) {
                         Some((path.to_owned(), tile.clone()))
                     } else {
                         None
@@ -669,7 +671,7 @@ where
             TileSet::from_tiles(renumbered_tiles, paths)
         })
         .unwrap_or_else(|| {
-            let extensions = extensions.iter().map(OsString::from).collect();
+            let extensions = extensions.clone();
             let tile_set = generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop).unwrap();
             let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
             fs::write(&analysis_cache_path, encoded_tile_set).unwrap();
@@ -758,14 +760,18 @@ where
 fn generate_tile_set<const N: usize>(
     tiles_path: &Path,
     tile_size: u32,
-    extensions: HashSet<OsString>,
+    extensions: HashSet<String>,
     crop: bool,
 ) -> io::Result<TileSet<[Rgb<u8>; N]>>
 where
     // TileSet<T>: Serialize,
     // T: std::hash::Hash + Eq + Copy,
 {
-    let images_paths = find_images(tiles_path, |path: &OsStr| extensions.contains(path))?;
+    let images_paths = find_images(tiles_path, |ext: &OsStr| {
+        ext.to_str()
+            .map(|s| extensions.contains(&s.to_lowercase()))
+            .unwrap_or(false)
+    })?;
     let pb = ProgressBar::new(images_paths.len() as u64)
         .with_message("Analysing tiles")
         .with_style(

@@ -107,7 +107,7 @@ fi
 if ! eval "aws s3 sync \"s3://$S3_BUCKET/$TILES_PREFIX\" \"$TILES_DIR\" --quiet $EXCLUDE_ARGS"; then
     write_error_and_exit "MISSING_TILES" "Failed to sync tiles from s3://$S3_BUCKET/$TILES_PREFIX"
 fi
-TILE_COUNT=$(find "$TILES_DIR" -type f \( -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" \) | wc -l)
+TILE_COUNT=$(find "$TILES_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" \) | wc -l)
 echo "Downloaded $TILE_COUNT tiles"
 
 if [ "$TILE_COUNT" -eq 0 ]; then
