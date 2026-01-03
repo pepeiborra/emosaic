@@ -71,7 +71,8 @@ pub fn prepare_tile(
         path: path.to_owned(),
         error: e.into(),
     })?);
-    let cache_path = dirs::cache_dir().unwrap().join("mosaic").join(format!(
+    let cache_dir = dirs::cache_dir().unwrap().join("mosaic");
+    let cache_path = cache_dir.join(format!(
         "{:x}{}.{}.jpg",
         content_hash,
         if crop { "_cropped" } else { "" },
@@ -191,6 +192,7 @@ pub fn prepare_tile(
             imageops::resize(tile_img.deref(), tile_size, tile_size, FilterType::Lanczos3);
         let orientation = get_jpeg_orientation(path).unwrap_or(1);
         let tile_img = rotate(tile_img.into(), orientation);
+        std::fs::create_dir_all(&cache_dir).unwrap();
         tile_img.save(cache_path).unwrap();
         Ok(tile_img.into())
     })
