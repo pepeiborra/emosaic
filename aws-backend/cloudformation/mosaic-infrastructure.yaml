@@ -64,6 +64,7 @@ Resources:
             AllowedMethods:
               - GET
               - HEAD
+              - PUT
             AllowedOrigins:
               - !Ref CorsOrigin
               - !Select [0, !Ref AdditionalCorsOrigins]
