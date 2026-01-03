@@ -3,7 +3,7 @@
 mod mosaic;
 
 use image::imageops::FilterType;
-use mosaic::error::ImageError;
+use mosaic::error::{ImageError, RenderError};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::create_dir_all;
@@ -562,7 +562,7 @@ fn n_to_1<const N: usize>(
     crop: bool,
     mode: Mode,
     tint_opacity: f32,
-) -> Result<ImgAndStats, ImageError>
+) -> Result<ImgAndStats, RenderError>
 where
     [(); N * 3]:,
 {

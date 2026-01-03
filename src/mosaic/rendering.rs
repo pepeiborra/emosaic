@@ -12,7 +12,7 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterato
 
 use super::algorithms::compare_matches;
 use super::analysis::get_img_colors;
-use super::error::ImageError;
+use super::error::RenderError;
 use super::stats::RenderStats;
 use super::tiles::{flipped_coords, Tile, TileSet};
 use fixed::traits::FromFixed;
@@ -254,7 +254,7 @@ pub struct RenderResult<const N: usize> {
 ///
 /// # Returns
 /// * `Ok(RenderResult)` - Contains the rendered image, statistics, and tile set
-/// * `Err(ImageError)` - If rendering fails due to image processing errors
+/// * `Err(RenderError)` - If rendering fails due to image processing errors or insufficient tiles
 ///
 /// # Performance
 /// This algorithm is more computationally expensive than `render_nto1` but produces
@@ -263,7 +263,7 @@ pub fn render_nto1_no_repeat<const N: usize>(
     source_img: &RgbImage,
     tile_set: TileSet<[Rgb<u8>; N]>,
     tile_size: u32,
-) -> Result<RenderResult<N>, ImageError>
+) -> Result<RenderResult<N>, RenderError>
 where
     [(); N * 3]:,
 {
@@ -285,12 +285,10 @@ where
         vtiles * tile_size,
     );
 
-    if (htiles * vtiles) as usize > tile_set.len() * 2 {
-        panic!(
-            "❌ Insufficient tiles for no-repeat mode: need {} tiles but only have {} available",
-            (htiles * vtiles) as usize,
-            tile_set.len() * 2
-        );
+    let required = (htiles * vtiles) as usize;
+    let available = tile_set.len() * 2;
+    if required > available {
+        return Err(RenderError::InsufficientTiles { required, available });
     }
 
     let tile_size_stepped = tile_size / step;
@@ -321,9 +319,7 @@ where
         .collect();
 
     // sort matches by nearest score, reversed as we pop from the end
-    matches.sort_unstable_by(|(_, a), (_, b)| {
-        b.last().unwrap().distance.cmp(&a.last().unwrap().distance)
-    });
+    matches.sort_unstable_by(|(_, a), (_, b)| compare_matches(b, a));
 
     let mut image = RgbImage::new(
         source_img.width() * tile_size_stepped,
@@ -384,7 +380,7 @@ where
                 nearest = compute_nearest(n, 10);
             }
             // ordered reinsert of nearest in matches
-            match matches.binary_search_by(|(_, x)| compare_matches(&nearest, x)) {
+            match matches.binary_search_by(|(_, x)| compare_matches(x, &nearest)) {
                 Ok(ix) => matches.insert(ix + 1, (n, nearest)),
                 Err(e) => matches.insert(e, (n, nearest)),
             }
