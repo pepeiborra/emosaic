@@ -54,6 +54,7 @@ NO_REPEAT="${NO_REPEAT:-false}"
 CROP="${CROP:-false}"
 RANDOMIZE="${RANDOMIZE:-0}"
 DOWNSAMPLE="${DOWNSAMPLE:-1}"
+EXCLUDED_FOLDERS="${EXCLUDED_FOLDERS:-}"
 
 echo ""
 echo "=== Configuration ==="
@@ -68,6 +69,7 @@ echo "No Repeat: $NO_REPEAT"
 echo "Crop: $CROP"
 echo "Randomize: $RANDOMIZE"
 echo "Downsample: $DOWNSAMPLE"
+echo "Excluded Folders: $EXCLUDED_FOLDERS"
 
 # Step 1: Download source image
 echo ""
@@ -85,8 +87,24 @@ echo "Downloaded: $(du -h $SOURCE_FILE | cut -f1)"
 echo ""
 echo "=== Step 2: Downloading tiles ==="
 echo "Syncing from s3://$S3_BUCKET/$TILES_PREFIX to $TILES_DIR"
+
+# Build exclude arguments for S3 sync
+EXCLUDE_ARGS="--exclude .emosaic_* --exclude */.emosaic_*"
+if [ -n "$EXCLUDED_FOLDERS" ]; then
+    # Split comma-separated folders and add exclude patterns for each
+    IFS=',' read -ra FOLDERS <<< "$EXCLUDED_FOLDERS"
+    for folder in "${FOLDERS[@]}"; do
+        # Trim whitespace
+        folder=$(echo "$folder" | xargs)
+        if [ -n "$folder" ]; then
+            EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude $folder/* --exclude $folder"
+            echo "Excluding folder: $folder"
+        fi
+    done
+fi
+
 # Exclude cache files (.emosaic_*) as they contain absolute paths from local builds
-if ! aws s3 sync "s3://$S3_BUCKET/$TILES_PREFIX" "$TILES_DIR" --quiet --exclude ".emosaic_*" --exclude "*/.emosaic_*"; then
+if ! eval "aws s3 sync \"s3://$S3_BUCKET/$TILES_PREFIX\" \"$TILES_DIR\" --quiet $EXCLUDE_ARGS"; then
     write_error_and_exit "MISSING_TILES" "Failed to sync tiles from s3://$S3_BUCKET/$TILES_PREFIX"
 fi
 TILE_COUNT=$(find "$TILES_DIR" -type f \( -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" \) | wc -l)
@@ -230,8 +248,31 @@ fi
 
 echo "All files uploaded to s3://$S3_BUCKET/$OUTPUT_PREFIX/"
 
-# Optional: Generate and upload thumbnail (extract from HTML or generate separately)
-# This would be a future enhancement
+# Step 5: Generate and upload thumbnail
+echo ""
+echo "=== Step 5: Generating thumbnail ==="
+THUMBNAIL_FILE="$OUTPUT_DIR/mosaic.thumb.png"
+THUMBNAIL_SIZE="300x300"
+
+if command -v convert &> /dev/null; then
+    echo "Generating ${THUMBNAIL_SIZE} thumbnail..."
+    if convert "$OUTPUT_IMAGE" -resize "$THUMBNAIL_SIZE" -quality 85 "$THUMBNAIL_FILE"; then
+        THUMB_SIZE=$(du -h "$THUMBNAIL_FILE" | cut -f1)
+        echo "Thumbnail generated: $THUMB_SIZE"
+
+        echo "Uploading thumbnail..."
+        if aws s3 cp "$THUMBNAIL_FILE" "s3://$S3_BUCKET/$OUTPUT_PREFIX/mosaic.thumb.png" \
+            --content-type "image/png"; then
+            echo "Thumbnail uploaded successfully"
+        else
+            echo "Warning: Failed to upload thumbnail (non-fatal)"
+        fi
+    else
+        echo "Warning: Failed to generate thumbnail (non-fatal)"
+    fi
+else
+    echo "Warning: ImageMagick not available, skipping thumbnail generation"
+fi
 
 # Cleanup
 echo ""

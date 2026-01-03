@@ -239,6 +239,30 @@ Resources:
           CORS_ORIGIN: !Ref CorsOrigin
       Timeout: 60
 
+  # List Tile Folders
+  ListTileFoldersFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-list-tile-folders'
+      Runtime: python3.11
+      Handler: list_tile_folders.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: '${Environment}-mosaic-lambda-role-arn'
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'Placeholder'})
+              }
+      Environment:
+        Variables:
+          S3_BUCKET: !ImportValue
+            Fn::Sub: '${Environment}-emosaic-tiles-bucket'
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 60
+
   #############################################################################
   # API Gateway Resources
   #############################################################################
@@ -357,6 +381,16 @@ Resources:
         Fn::Sub: '${Environment}-tiles-resource-id'
       PathPart: 'count'
 
+  # /tiles/folders - list available tile folders
+  TilesFoldersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !ImportValue
+        Fn::Sub: '${Environment}-tiles-resource-id'
+      PathPart: 'folders'
+
   #############################################################################
   # CORS OPTIONS Methods
   #############################################################################
@@ -467,6 +501,31 @@ Resources:
       RestApiId: !ImportValue
         Fn::Sub: '${Environment}-tile-flags-api-id'
       ResourceId: !Ref TilesCountResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  TilesFoldersOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref TilesFoldersResource
       HttpMethod: OPTIONS
       AuthorizationType: NONE
       Integration:
@@ -638,6 +697,23 @@ Resources:
           - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
           - LambdaArn: !GetAtt GetTileCountFunction.Arn
 
+  # GET /tiles/folders
+  ListTileFoldersMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref TilesFoldersResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt ListTileFoldersFunction.Arn
+
   #############################################################################
   # Lambda Permissions
   #############################################################################
@@ -730,6 +806,17 @@ Resources:
         - ApiId: !ImportValue
             Fn::Sub: '${Environment}-tile-flags-api-id'
 
+  ListTileFoldersPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ListTileFoldersFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
   #############################################################################
   # API Deployment
   #############################################################################
@@ -745,11 +832,13 @@ Resources:
       - SubmitJobMethod
       - GetJobMethod
       - GetTileCountMethod
+      - ListTileFoldersMethod
       - MosaicsOptionsMethod
       - MosaicIdOptionsMethod
       - JobsOptionsMethod
       - JobIdOptionsMethod
       - TilesCountOptionsMethod
+      - TilesFoldersOptionsMethod
     Properties:
       RestApiId: !ImportValue
         Fn::Sub: '${Environment}-tile-flags-api-id'
@@ -793,3 +882,7 @@ Outputs:
   GetTileCountFunctionName:
     Description: Name of the get tile count function
     Value: !Ref GetTileCountFunction
+
+  ListTileFoldersFunctionName:
+    Description: Name of the list tile folders function
+    Value: !Ref ListTileFoldersFunction

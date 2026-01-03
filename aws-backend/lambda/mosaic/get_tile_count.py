@@ -47,8 +47,8 @@ def save_cached_count(tiles_prefix: str, count: int) -> None:
         print(f"Failed to save cache: {e}")
 
 
-def count_tiles(tiles_prefix: str) -> int:
-    """Count all tiles under the prefix."""
+def count_tiles(tiles_prefix: str, excluded_folders: list[str] = None) -> int:
+    """Count all tiles under the prefix, optionally excluding certain folders."""
     count = 0
     continuation_token = None
 
@@ -62,7 +62,22 @@ def count_tiles(tiles_prefix: str) -> int:
             list_params['ContinuationToken'] = continuation_token
 
         response = s3_client.list_objects_v2(**list_params)
-        count += response.get('KeyCount', 0)
+
+        # Count objects, filtering out excluded folders if specified
+        if excluded_folders:
+            for obj in response.get('Contents', []):
+                key = obj['Key']
+                # Check if this key is in any excluded folder
+                relative_path = key[len(tiles_prefix):]
+                is_excluded = False
+                for folder in excluded_folders:
+                    if relative_path.startswith(folder + '/') or relative_path == folder:
+                        is_excluded = True
+                        break
+                if not is_excluded:
+                    count += 1
+        else:
+            count += response.get('KeyCount', 0)
 
         if response.get('IsTruncated'):
             continuation_token = response.get('NextContinuationToken')
@@ -78,16 +93,40 @@ def lambda_handler(event, context):
 
     Returns the count of available tiles in the S3 bucket.
     Uses caching to provide fast responses (cache refreshes every 5 minutes).
+    Optionally excludes specified folders from the count.
     """
     try:
         query_params = event.get('queryStringParameters') or {}
         tiles_prefix = query_params.get('prefix', 'tiles/')
         force_refresh = query_params.get('refresh', 'false').lower() == 'true'
+        excluded_param = query_params.get('excluded', '')
+
+        # Parse excluded folders (comma-separated)
+        excluded_folders = [f.strip() for f in excluded_param.split(',') if f.strip()] if excluded_param else []
 
         if not tiles_prefix.endswith('/'):
             tiles_prefix += '/'
 
-        # Check cache first
+        # When excluded_folders is specified, skip cache and count directly
+        # (caching with exclusions would require separate cache keys for each combination)
+        if excluded_folders:
+            tile_count = count_tiles(tiles_prefix, excluded_folders)
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'application/json',
+                    'Access-Control-Allow-Origin': cors_origin,
+                    'Access-Control-Allow-Credentials': 'true'
+                },
+                'body': json.dumps({
+                    'count': tile_count,
+                    'prefix': tiles_prefix,
+                    'excluded_folders': excluded_folders,
+                    'cached': False
+                })
+            }
+
+        # Check cache first (only for non-excluded counts)
         cached_count, cached_time = get_cached_count(tiles_prefix)
         cache_age = time.time() - cached_time
 

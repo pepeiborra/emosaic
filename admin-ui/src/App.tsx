@@ -8,6 +8,8 @@ import { Dashboard } from './pages/Dashboard';
 import { CreateMosaic } from './pages/CreateMosaic';
 import { MosaicDetail } from './pages/MosaicDetail';
 import { JobStatus } from './pages/JobStatus';
+import { UserManagement } from './pages/UserManagement';
+import { UploadImages } from './pages/UploadImages';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,6 +41,8 @@ function App() {
               <Route path="/create" element={<CreateMosaic />} />
               <Route path="/mosaic/:id" element={<MosaicDetail />} />
               <Route path="/job/:id" element={<JobStatus />} />
+              <Route path="/users" element={<UserManagement />} />
+              <Route path="/upload" element={<UploadImages />} />
             </Route>
           </Routes>
         </AuthProvider>

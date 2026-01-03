@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { createMosaic, getUploadUrl, uploadFileToS3, submitJob, getTileCount } from '../services/api';
+import { createMosaic, getUploadUrl, uploadFileToS3, submitJob, getTileCount, listTileFolders } from '../services/api';
 import type { MosaicConfig } from '../types/api';
 
 const TILE_SIZES = [16, 32, 64, 128, 256];
@@ -142,13 +142,21 @@ export function CreateMosaic() {
     no_repeat: false,
     crop: false,
     downsample: 1,
+    excluded_folders: [],
   });
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
 
-  // Fetch tile count
+  // Fetch tile folders
+  const { data: tileFoldersData, isLoading: foldersLoading } = useQuery({
+    queryKey: ['tileFolders', tilesDir],
+    queryFn: () => listTileFolders(tilesDir),
+    enabled: !!tilesDir,
+  });
+
+  // Fetch tile count (with exclusions)
   const { data: tileCountData } = useQuery({
-    queryKey: ['tileCount', tilesDir],
-    queryFn: () => getTileCount(tilesDir),
+    queryKey: ['tileCount', tilesDir, config.excluded_folders],
+    queryFn: () => getTileCount(tilesDir, config.excluded_folders || []),
     enabled: !!tilesDir,
   });
 
@@ -253,6 +261,25 @@ export function CreateMosaic() {
 
     return { isValid: true, message: null };
   }, [config.no_repeat, mosaicStats, tileCountData]);
+
+  // Toggle folder exclusion
+  const toggleFolderExclusion = useCallback((folderName: string) => {
+    setConfig(prev => {
+      const excluded = prev.excluded_folders || [];
+      if (excluded.includes(folderName)) {
+        return { ...prev, excluded_folders: excluded.filter(f => f !== folderName) };
+      } else {
+        return { ...prev, excluded_folders: [...excluded, folderName] };
+      }
+    });
+  }, []);
+
+  // Calculate included folder count
+  const includedFolderCount = useMemo(() => {
+    if (!tileFoldersData) return 0;
+    const excludedCount = config.excluded_folders?.length || 0;
+    return tileFoldersData.count - excludedCount;
+  }, [tileFoldersData, config.excluded_folders]);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -456,6 +483,57 @@ export function CreateMosaic() {
               Crop tiles to square (instead of resize)
             </label>
           </div>
+        </div>
+
+        {/* Tile Folders */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Tile Folders
+            {tileFoldersData && (
+              <span className="ml-2 text-gray-400 font-normal">
+                ({includedFolderCount} of {tileFoldersData.count} included)
+              </span>
+            )}
+          </label>
+          {foldersLoading ? (
+            <div className="flex items-center justify-center py-4">
+              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
+              <span className="ml-2 text-sm text-gray-500">Loading folders...</span>
+            </div>
+          ) : tileFoldersData && tileFoldersData.folders.length > 0 ? (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <div className="max-h-48 overflow-y-auto">
+                {tileFoldersData.folders.map((folder) => {
+                  const isExcluded = config.excluded_folders?.includes(folder.name) || false;
+                  return (
+                    <div
+                      key={folder.name}
+                      className={`flex items-center px-3 py-2 border-b border-gray-100 last:border-b-0 cursor-pointer hover:bg-gray-50 ${
+                        isExcluded ? 'bg-gray-50' : ''
+                      }`}
+                      onClick={() => toggleFolderExclusion(folder.name)}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!isExcluded}
+                        onChange={() => toggleFolderExclusion(folder.name)}
+                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <span className={`ml-2 text-sm ${isExcluded ? 'text-gray-400' : 'text-gray-700'}`}>
+                        {folder.name}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">No folders found in tiles directory</p>
+          )}
+          <p className="mt-1 text-xs text-gray-500">
+            Uncheck folders to exclude them from mosaic generation
+          </p>
         </div>
 
         {/* Mosaic Statistics */}

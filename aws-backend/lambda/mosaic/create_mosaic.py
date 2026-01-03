@@ -76,6 +76,11 @@ def lambda_handler(event, context):
         if 'tiles_dir' in body:
             item['tiles_dir'] = body['tiles_dir']
 
+        # Handle excluded_folders from config
+        excluded_folders = config.get('excluded_folders', [])
+        if excluded_folders:
+            item['excluded_folders'] = excluded_folders
+
         # Store in DynamoDB
         table.put_item(Item=item)
 

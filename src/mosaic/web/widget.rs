@@ -187,12 +187,13 @@ where
     fn generate_year_filter_css(&self, min_year: i32, max_year: i32) -> String {
         let mut css = String::new();
 
-        // Base rule: when year filter is active, dim all tiles by default
+        // Base rule: when year filter is active, dim all tiles with a dark overlay
+        // Note: !important is needed to override the external CSS rule for .tile-region:not(.disabled)
         css.push_str(
             r#"/* Year filter CSS - generated dynamically based on tile years */
         .zoom-container[data-filter-year] .tile-region {
             pointer-events: none;
-            opacity: 0.3;
+            background-color: rgba(0, 0, 0, 0.7) !important;
         }
         "#,
         );
@@ -203,7 +204,7 @@ where
                 r#"
         .zoom-container[data-filter-year="{}"] .tile-region[data-year="{}"] {{
             pointer-events: auto;
-            opacity: 1;
+            background-color: transparent !important;
         }}
         "#,
                 year, year

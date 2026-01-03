@@ -1,0 +1,484 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Emosaic User Management API - Cognito user CRUD operations'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'prod'
+    Description: Environment name
+
+  CorsOrigin:
+    Type: String
+    Default: 'https://casadelmanco.com'
+    Description: CORS origin for API Gateway
+
+Resources:
+  #############################################################################
+  # Lambda Function
+  #############################################################################
+
+  UserManagementFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-user-management'
+      Runtime: python3.11
+      Handler: user_management.lambda_handler
+      Role: !GetAtt UserManagementRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': json.dumps({'message': 'Placeholder'})}
+      Environment:
+        Variables:
+          USER_POOL_ID: !ImportValue
+            Fn::Sub: '${Environment}-emosaic-user-pool-id'
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 30
+
+  UserManagementRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-user-management-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CognitoUserManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cognito-idp:ListUsers
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminDeleteUser
+                  - cognito-idp:AdminEnableUser
+                  - cognito-idp:AdminDisableUser
+                  - cognito-idp:AdminGetUser
+                Resource: !Sub
+                  - 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${UserPoolId}'
+                  - UserPoolId: !ImportValue
+                      Fn::Sub: '${Environment}-emosaic-user-pool-id'
+
+  #############################################################################
+  # API Gateway Resources
+  #############################################################################
+
+  # Helper to get root resource
+  APIRootResource:
+    Type: Custom::GetRootResource
+    Properties:
+      ServiceToken: !GetAtt GetRootResourceFunction.Arn
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  GetRootResourceFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-get-root-resource-users'
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt GetRootResourceRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  api_id = event['ResourceProperties']['RestApiId']
+                  client = boto3.client('apigateway')
+                  response = client.get_resources(restApiId=api_id, limit=500)
+
+                  root_id = None
+                  for item in response['items']:
+                      if item['path'] == '/':
+                          root_id = item['id']
+                          break
+
+                  if root_id:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS,
+                                     {'ResourceId': root_id}, root_id)
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.FAILED,
+                                     {'Error': 'Root resource not found'})
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED,
+                                 {'Error': str(e)})
+      Timeout: 30
+
+  GetRootResourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: APIGatewayAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                Resource: '*'
+
+  # /users resource
+  UsersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !GetAtt APIRootResource.ResourceId
+      PathPart: 'users'
+
+  # /users/{username} resource
+  UserByUsernameResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !Ref UsersResource
+      PathPart: '{username}'
+
+  # /users/{username}/resend-invite resource
+  ResendInviteResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !Ref UserByUsernameResource
+      PathPart: 'resend-invite'
+
+  # /users/{username}/enable resource
+  EnableUserResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !Ref UserByUsernameResource
+      PathPart: 'enable'
+
+  # /users/{username}/disable resource
+  DisableUserResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !Ref UserByUsernameResource
+      PathPart: 'disable'
+
+  #############################################################################
+  # CORS OPTIONS Methods
+  #############################################################################
+
+  UsersOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref UsersResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  UserByUsernameOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref UserByUsernameResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ResendInviteOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ResendInviteResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  EnableUserOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref EnableUserResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'PUT,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  DisableUserOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref DisableUserResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'PUT,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  #############################################################################
+  # API Methods
+  #############################################################################
+
+  # GET /users - List users
+  ListUsersMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref UsersResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt UserManagementFunction.Arn
+
+  # POST /users - Create user
+  CreateUserMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref UsersResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt UserManagementFunction.Arn
+
+  # DELETE /users/{username} - Delete user
+  DeleteUserMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref UserByUsernameResource
+      HttpMethod: DELETE
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      RequestParameters:
+        method.request.path.username: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt UserManagementFunction.Arn
+
+  # POST /users/{username}/resend-invite - Resend invite
+  ResendInviteMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ResendInviteResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      RequestParameters:
+        method.request.path.username: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt UserManagementFunction.Arn
+
+  # PUT /users/{username}/enable - Enable user
+  EnableUserMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref EnableUserResource
+      HttpMethod: PUT
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      RequestParameters:
+        method.request.path.username: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt UserManagementFunction.Arn
+
+  # PUT /users/{username}/disable - Disable user
+  DisableUserMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref DisableUserResource
+      HttpMethod: PUT
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      RequestParameters:
+        method.request.path.username: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt UserManagementFunction.Arn
+
+  #############################################################################
+  # Lambda Permission
+  #############################################################################
+
+  UserManagementPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UserManagementFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  #############################################################################
+  # API Deployment
+  #############################################################################
+
+  UserManagementAPIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ListUsersMethod
+      - CreateUserMethod
+      - DeleteUserMethod
+      - ResendInviteMethod
+      - EnableUserMethod
+      - DisableUserMethod
+      - UsersOptionsMethod
+      - UserByUsernameOptionsMethod
+      - ResendInviteOptionsMethod
+      - EnableUserOptionsMethod
+      - DisableUserOptionsMethod
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      StageName: !Ref Environment
+
+Outputs:
+  UserManagementFunctionName:
+    Description: Name of the user management function
+    Value: !Ref UserManagementFunction
+    Export:
+      Name: !Sub '${Environment}-user-management-function'
+
+  UserManagementFunctionArn:
+    Description: ARN of the user management function
+    Value: !GetAtt UserManagementFunction.Arn

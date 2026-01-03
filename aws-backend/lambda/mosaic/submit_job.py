@@ -65,6 +65,7 @@ def lambda_handler(event, context):
             }
 
         mosaic_id = body['mosaic_id']
+        set_main = body.get('set_main', False)
 
         # Get mosaic details from DynamoDB
         mosaic_response = mosaics_table.get_item(Key={'id': mosaic_id})
@@ -103,6 +104,10 @@ def lambda_handler(event, context):
         output_prefix = f'mosaics/{mosaic_id}'
         tiles_prefix = mosaic.get('tiles_dir', 'tiles/').replace(f's3://{S3_BUCKET}/', '')
 
+        # Get excluded folders (stored as a list in DynamoDB)
+        excluded_folders = mosaic.get('excluded_folders', [])
+        excluded_folders_str = ','.join(excluded_folders) if excluded_folders else ''
+
         if not source_image_key:
             return {
                 'statusCode': 400,
@@ -136,7 +141,8 @@ def lambda_handler(event, context):
                     {'name': 'NO_REPEAT', 'value': no_repeat},
                     {'name': 'CROP', 'value': crop},
                     {'name': 'RANDOMIZE', 'value': randomize},
-                    {'name': 'DOWNSAMPLE', 'value': downsample}
+                    {'name': 'DOWNSAMPLE', 'value': downsample},
+                    {'name': 'EXCLUDED_FOLDERS', 'value': excluded_folders_str}
                 ]
             }
         )
@@ -151,6 +157,7 @@ def lambda_handler(event, context):
             'started_at': now,
             'updated_at': now,
             'batch_job_id': batch_job_id,
+            'set_main': set_main,
             'parameters': {
                 'tile_size': int(tile_size),
                 'mode': int(mode),

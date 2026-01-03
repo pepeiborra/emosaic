@@ -19,8 +19,13 @@ function StatusBadge({ status }: { status: Mosaic['status'] }) {
 }
 
 function MosaicCard({ mosaic }: { mosaic: Mosaic }) {
-  const thumbnailUrl = mosaic.thumbnail_path
+  // Priority: thumbnail > full mosaic > source image
+  const previewUrl = mosaic.thumbnail_path
     ? `/${mosaic.thumbnail_path}`
+    : mosaic.s3_path
+    ? `/${mosaic.s3_path}`
+    : mosaic.source_image_path
+    ? `/${mosaic.source_image_path}`
     : null;
 
   return (
@@ -29,9 +34,9 @@ function MosaicCard({ mosaic }: { mosaic: Mosaic }) {
       className="group relative bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow"
     >
       <div className="aspect-square bg-gray-100">
-        {thumbnailUrl ? (
+        {previewUrl ? (
           <img
-            src={thumbnailUrl}
+            src={previewUrl}
             alt={mosaic.title || 'Mosaic'}
             className="w-full h-full object-cover"
           />

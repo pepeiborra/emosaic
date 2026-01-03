@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     curl \
     unzip \
+    imagemagick \
     && rm -rf /var/lib/apt/lists/*
 
 # Install AWS CLI v2 for S3 operations

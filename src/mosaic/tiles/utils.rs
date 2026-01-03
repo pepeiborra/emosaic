@@ -54,7 +54,8 @@ pub fn prepare_tile_with_date(
     ),
     ImageError,
 > {
-    let date_taken = get_exif_date(path);
+    // Try EXIF date first, then fall back to extracting year from file path
+    let date_taken = get_exif_date(path).or_else(|| get_year_from_path(path));
     let image = prepare_tile(path, tile_size, crop)?;
     Ok((image, date_taken))
 }
@@ -245,6 +246,32 @@ fn get_exif_date(file_path: &Path) -> Option<String> {
     None
 }
 
+/// Extract year from file path as a fallback when EXIF date is not available.
+///
+/// Looks for 4-digit years (1900-2099) in the file path, checking:
+/// 1. Directory names (e.g., "/photos/2023/vacation/photo.jpg")
+/// 2. Filename patterns (e.g., "2023-01-15.jpg", "photo_2023.jpg")
+///
+/// Returns the year in EXIF-like format "YYYY:01:01" if found.
+fn get_year_from_path(file_path: &Path) -> Option<String> {
+    let path_str = file_path.to_string_lossy();
+
+    // Regex to find 4-digit years between 1900-2099
+    // Look for years that are either at boundaries or surrounded by non-digits
+    let year_pattern = regex::Regex::new(r"(?:^|[^0-9])(19[0-9]{2}|20[0-9]{2})(?:[^0-9]|$)").ok()?;
+
+    // Find all year matches in the path
+    let mut years: Vec<i32> = year_pattern
+        .captures_iter(&path_str)
+        .filter_map(|cap| cap.get(1))
+        .filter_map(|m| m.as_str().parse::<i32>().ok())
+        .collect();
+
+    // Sort and take the most recent year (likely to be the photo year)
+    years.sort();
+    years.last().map(|year| format!("{}:01:01", year))
+}
+
 fn rotate(mut img: DynamicImage, orientation: u32) -> DynamicImage {
     let rgba = img.color().has_alpha();
     img = match orientation {
@@ -327,5 +354,33 @@ mod tests {
             date_only_input.to_string()
         };
         assert_eq!(result, "2003:03:19");
+    }
+
+    #[test]
+    fn test_get_year_from_path() {
+        // Test directory structure with year
+        let path = Path::new("/photos/2023/vacation/photo.jpg");
+        assert_eq!(get_year_from_path(path), Some("2023:01:01".to_string()));
+
+        // Test filename with year
+        let path = Path::new("/photos/IMG_2019_summer.jpg");
+        assert_eq!(get_year_from_path(path), Some("2019:01:01".to_string()));
+
+        // Test multiple years - should return the most recent
+        let path = Path::new("/backup/2020/photos_from_2021/image.jpg");
+        assert_eq!(get_year_from_path(path), Some("2021:01:01".to_string()));
+
+        // Test no year in path
+        let path = Path::new("/photos/vacation/beach.jpg");
+        assert_eq!(get_year_from_path(path), None);
+
+        // Test year at start of filename
+        let path = Path::new("2022-01-15-photo.jpg");
+        assert_eq!(get_year_from_path(path), Some("2022:01:01".to_string()));
+
+        // Test year shouldn't match random 4-digit numbers like image dimensions
+        // 1920 is a valid year though, so let's test with something clearly not a year
+        let path = Path::new("/photos/IMG_0001.jpg");
+        assert_eq!(get_year_from_path(path), None);
     }
 }

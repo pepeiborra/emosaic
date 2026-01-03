@@ -271,7 +271,7 @@ export function MosaicDetail() {
   });
 
   const regenerateMutation = useMutation({
-    mutationFn: () => submitJob(id!),
+    mutationFn: () => submitJob(id!, mosaic?.is_main ?? false),
     onSuccess: (job) => {
       navigate(`/job/${job.id}`);
     },
@@ -404,6 +404,16 @@ export function MosaicDetail() {
             className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
           >
             View Full Size
+          </a>
+        )}
+        {mosaic.status === 'completed' && (
+          <a
+            href={`/mosaics/${mosaic.id}/mosaic_widget.html`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700"
+          >
+            Open Mosaic Viewer
           </a>
         )}
         <button

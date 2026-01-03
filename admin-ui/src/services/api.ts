@@ -5,6 +5,9 @@ import type {
   PaginatedResponse,
   UploadUrlResponse,
   CreateMosaicRequest,
+  UserListResponse,
+  UserActionResponse,
+  TileFoldersResponse,
 } from '../types/api';
 
 // In development, use /api which is proxied by Vite
@@ -82,10 +85,10 @@ export async function setMainMosaic(id: string): Promise<Mosaic> {
 }
 
 // Job endpoints
-export async function submitJob(mosaicId: string): Promise<Job> {
+export async function submitJob(mosaicId: string, setMain = false): Promise<Job> {
   return apiRequest('/jobs', {
     method: 'POST',
-    body: JSON.stringify({ mosaic_id: mosaicId }),
+    body: JSON.stringify({ mosaic_id: mosaicId, set_main: setMain }),
   });
 }
 
@@ -140,7 +143,43 @@ export async function uploadFileToS3(
 }
 
 // Tiles endpoints
-export async function getTileCount(prefix = 'tiles/'): Promise<{ count: number; prefix: string }> {
+export async function getTileCount(prefix = 'tiles/', excludedFolders: string[] = []): Promise<{ count: number; prefix: string }> {
   const params = new URLSearchParams({ prefix });
+  if (excludedFolders.length > 0) {
+    params.set('excluded', excludedFolders.join(','));
+  }
   return apiRequest(`/tiles/count?${params}`);
+}
+
+export async function listTileFolders(prefix = 'tiles/'): Promise<TileFoldersResponse> {
+  const params = new URLSearchParams({ prefix });
+  return apiRequest(`/tiles/folders?${params}`);
+}
+
+// User management endpoints
+export async function listUsers(): Promise<UserListResponse> {
+  return apiRequest('/users');
+}
+
+export async function createUser(email: string, sendInvite = true): Promise<UserActionResponse> {
+  return apiRequest('/users', {
+    method: 'POST',
+    body: JSON.stringify({ email, send_invite: sendInvite }),
+  });
+}
+
+export async function deleteUser(username: string): Promise<UserActionResponse> {
+  return apiRequest(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' });
+}
+
+export async function resendUserInvite(username: string): Promise<UserActionResponse> {
+  return apiRequest(`/users/${encodeURIComponent(username)}/resend-invite`, { method: 'POST' });
+}
+
+export async function enableUser(username: string): Promise<UserActionResponse> {
+  return apiRequest(`/users/${encodeURIComponent(username)}/enable`, { method: 'PUT' });
+}
+
+export async function disableUser(username: string): Promise<UserActionResponse> {
+  return apiRequest(`/users/${encodeURIComponent(username)}/disable`, { method: 'PUT' });
 }

@@ -6,6 +6,7 @@ export interface MosaicConfig {
   crop?: boolean;
   randomize?: number;
   downsample?: number;
+  excluded_folders?: string[];
 }
 
 /** Statistics about a tile's usage frequency */
@@ -89,4 +90,41 @@ export interface CreateMosaicRequest {
 
 export interface SubmitJobRequest {
   mosaic_id: string;
+}
+
+// User management types
+export interface User {
+  username: string;
+  email: string | null;
+  status: 'UNCONFIRMED' | 'CONFIRMED' | 'ARCHIVED' | 'COMPROMISED' | 'UNKNOWN' | 'RESET_REQUIRED' | 'FORCE_CHANGE_PASSWORD';
+  enabled: boolean;
+  created: string | null;
+  modified: string | null;
+}
+
+export interface UserListResponse {
+  users: User[];
+  count: number;
+  userPoolId: string;
+}
+
+export interface UserActionResponse {
+  success: boolean;
+  username?: string;
+  email?: string;
+  status?: string;
+  message?: string;
+  error?: string;
+}
+
+// Tile folder types
+export interface TileFolder {
+  name: string;
+  prefix: string;
+}
+
+export interface TileFoldersResponse {
+  folders: TileFolder[];
+  prefix: string;
+  count: number;
 }

@@ -67,12 +67,9 @@ aws s3 sync dist/ s3://${ADMIN_BUCKET}/admin/ \
     --exclude "*" \
     --include "*.json"
 
-# Create a root redirect page for environments with their own CloudFront (redirects / to /admin/)
-echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url=/admin/"></head><body>Redirecting to <a href="/admin/">Admin UI</a>...</body></html>' | \
-    aws s3 cp - s3://${ADMIN_BUCKET}/index.html \
-    --region $REGION \
-    --content-type "text/html; charset=utf-8" \
-    --cache-control "no-cache, no-store, must-revalidate"
+# NOTE: We do NOT create a root redirect page here, because the root index.html
+# is managed by set_main_mosaic.py which copies the main mosaic widget there.
+# Creating a redirect here would overwrite the main mosaic.
 
 # Determine CloudFront distribution ID
 # - For prod (no custom domain): use main distribution

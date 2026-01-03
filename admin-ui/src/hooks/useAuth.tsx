@@ -11,6 +11,8 @@ import {
   signOut,
   getCurrentUser,
   confirmSignIn,
+  resetPassword,
+  confirmResetPassword,
   type SignInInput,
 } from 'aws-amplify/auth';
 
@@ -26,6 +28,8 @@ interface AuthContextType {
   error: string | null;
   login: (email: string, password: string) => Promise<{ needsNewPassword: boolean }>;
   completeNewPassword: (newPassword: string) => Promise<void>;
+  forgotPassword: (email: string) => Promise<void>;
+  confirmForgotPassword: (email: string, code: string, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
 }
@@ -94,6 +98,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const forgotPassword = async (email: string): Promise<void> => {
+    setError(null);
+    try {
+      await resetPassword({ username: email });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to send reset code';
+      setError(message);
+      throw err;
+    }
+  };
+
+  const confirmForgotPassword = async (email: string, code: string, newPassword: string): Promise<void> => {
+    setError(null);
+    try {
+      await confirmResetPassword({
+        username: email,
+        confirmationCode: code,
+        newPassword,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to reset password';
+      setError(message);
+      throw err;
+    }
+  };
+
   const logout = async () => {
     try {
       await signOut();
@@ -114,6 +144,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         error,
         login,
         completeNewPassword,
+        forgotPassword,
+        confirmForgotPassword,
         logout,
         clearError,
       }}

@@ -44,11 +44,12 @@ STACK_JOB_HANDLER="${ENVIRONMENT}-job-handler"
 STACK_BATCH="${ENVIRONMENT}-batch-infrastructure"
 STACK_MOSAIC_API="${ENVIRONMENT}-mosaic-api"
 STACK_PHASE3="${ENVIRONMENT}-phase3-enhancements"
+STACK_USER_MGMT="${ENVIRONMENT}-user-management"
 STACK_CERTIFICATE="${ENVIRONMENT}-domain-certificate"
 STACK_ADMIN_UI="${ENVIRONMENT}-admin-ui"
 
 # Stacks in reverse dependency order (for deletion) - main region
-ALL_STACKS="$STACK_ADMIN_UI $STACK_PHASE3 $STACK_MOSAIC_API $STACK_BATCH $STACK_JOB_HANDLER $STACK_MOSAIC_INFRA $STACK_TILE_FLAGS"
+ALL_STACKS="$STACK_ADMIN_UI $STACK_USER_MGMT $STACK_PHASE3 $STACK_MOSAIC_API $STACK_BATCH $STACK_JOB_HANDLER $STACK_MOSAIC_INFRA $STACK_TILE_FLAGS"
 
 # =============================================================================
 # Clean existing stacks if requested
@@ -442,6 +443,43 @@ rm -f set_main_mosaic.zip list_jobs.zip get_upload_url.zip cancel_job.zip
 
 echo ""
 echo "====================================================================="
+echo "Phase 6.5: Deploying User Management API"
+echo "====================================================================="
+echo ""
+
+# Package user management Lambda
+echo "📦 Packaging user management Lambda..."
+cd lambda/mosaic
+zip -q -r ../../user_management.zip user_management.py
+cd ../..
+
+# Deploy user management stack
+echo "🏗️  Deploying user management stack..."
+aws cloudformation deploy \
+    --template-file cloudformation/user-management.yaml \
+    --stack-name $STACK_USER_MGMT \
+    --parameter-overrides \
+        Environment=$ENVIRONMENT \
+        CorsOrigin="$CORS_ORIGIN" \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --region $REGION
+
+if [ $? -eq 0 ]; then
+    echo "✅ User management deployed"
+else
+    echo "❌ User management deployment failed"
+    exit 1
+fi
+
+# Update user management Lambda code
+echo "📤 Updating user management Lambda code..."
+USER_MGMT_FN=$(aws cloudformation describe-stacks --stack-name $STACK_USER_MGMT --query "Stacks[0].Outputs[?OutputKey=='UserManagementFunctionName'].OutputValue" --output text --region $REGION)
+aws lambda update-function-code --function-name $USER_MGMT_FN --zip-file fileb://user_management.zip --region $REGION > /dev/null
+
+rm -f user_management.zip
+
+echo ""
+echo "====================================================================="
 echo "Phase 7: Deploying Domain Certificate (if custom domain configured)"
 echo "====================================================================="
 echo ""
@@ -803,6 +841,14 @@ echo "    POST   $API_URL/upload-url                - Get presigned URL for S3 u
 echo ""
 echo "  Tiles (require Cognito auth):"
 echo "    GET    $API_URL/tiles/count               - Get tile count for validation"
+echo ""
+echo "  User Management (require Cognito auth):"
+echo "    GET    $API_URL/users                     - List all users"
+echo "    POST   $API_URL/users                     - Create new user"
+echo "    DELETE $API_URL/users/{username}          - Delete user"
+echo "    POST   $API_URL/users/{username}/resend-invite - Resend invite"
+echo "    PUT    $API_URL/users/{username}/enable   - Enable user"
+echo "    PUT    $API_URL/users/{username}/disable  - Disable user"
 echo ""
 echo "🎉 Deployment completed successfully!"
 echo ""
