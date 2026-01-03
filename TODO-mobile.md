@@ -47,27 +47,27 @@
 
 ### Rust Changes (`src/mosaic/web/widget.rs`)
 
-- [ ] Create `generate_year_filter_css(min_year, max_year)` function that generates CSS rules for each year
-- [ ] Generate base rule: `.zoom-container[data-filter-year] .tile-region { pointer-events: none; opacity: 0.3; }`
-- [ ] Generate per-year rules: `.zoom-container[data-filter-year="YYYY"] .tile-region[data-year="YYYY"] { pointer-events: auto; opacity: 1; }`
-- [ ] Include generated CSS in the `<style>` block of the HTML output
-- [ ] Ensure `data-year` attribute is present on all `.tile-region` elements (verify existing)
+- [x] Create `generate_year_filter_css(min_year, max_year)` function that generates CSS rules for each year
+- [x] Generate base rule: `.zoom-container[data-filter-year] .tile-region { pointer-events: none; opacity: 0.3; }`
+- [x] Generate per-year rules: `.zoom-container[data-filter-year="YYYY"] .tile-region[data-year="YYYY"] { pointer-events: auto; opacity: 1; }`
+- [x] Include generated CSS in the `<style>` block of the HTML output
+- [x] Ensure `data-year` attribute is present on all `.tile-region` elements (verify existing)
 
 ### JS Changes (`src/assets/mosaic-widget.js`)
 
-- [ ] Rewrite `updateYearFilter(sliderValue)` to use container attribute instead of iterating tiles
-- [ ] Get reference to `.zoom-container` element
-- [ ] When `sliderValue === 0`: remove `data-filter-year` attribute from container
-- [ ] When `sliderValue > 0`: set `data-filter-year` attribute to selected year
-- [ ] Update year display text as before
-- [ ] Remove all `document.querySelectorAll('.tile-region')` iteration code
-- [ ] Remove `.disabled` class manipulation code (CSS handles it now)
+- [x] Rewrite `updateYearFilter(sliderValue)` to use container attribute instead of iterating tiles
+- [x] Get reference to `.zoom-container` element
+- [x] When `sliderValue === 0`: remove `data-filter-year` attribute from container
+- [x] When `sliderValue > 0`: set `data-filter-year` attribute to selected year
+- [x] Update year display text as before
+- [x] Remove all `document.querySelectorAll('.tile-region')` iteration code
+- [x] Remove `.disabled` class manipulation code (CSS handles it now)
 
 ### CSS Changes (`src/assets/mosaic-widget.css`)
 
-- [ ] Remove or deprecate `.tile-region.disabled` styles (replaced by attribute-based filtering)
-- [ ] Add base filtering rule if not generated dynamically
-- [ ] Ensure transitions are smooth: add `transition: opacity 0.15s ease` to `.tile-region`
+- [x] Remove or deprecate `.tile-region.disabled` styles (replaced by attribute-based filtering)
+- [x] Add base filtering rule if not generated dynamically
+- [x] Ensure transitions are smooth: add `transition: opacity 0.15s ease` to `.tile-region`
 
 ---
 
@@ -107,9 +107,9 @@
    - [x] Modal back button support (Issue 1)
 
 2. **Phase 2: Year Slider Fix**
-   - [ ] CSS generation in Rust (Issue 3)
-   - [ ] JS simplification (Issue 3)
-   - [ ] CSS cleanup (Issue 3)
+   - [x] CSS generation in Rust (Issue 3)
+   - [x] JS simplification (Issue 3)
+   - [x] CSS cleanup (Issue 3)
 
 3. **Phase 3: Modal Zoom**
    - [x] HTML wrapper structure (Issue 2)

@@ -138,6 +138,9 @@ where
             .unwrap()
             .as_secs();
 
+        // Generate CSS rules for year filtering
+        let year_filter_css = self.generate_year_filter_css(min_year, max_year);
+
         html.push_str(&format!(
             r#"<!DOCTYPE html>
 <html lang="en">
@@ -151,6 +154,9 @@ where
     <meta name="mobile-web-app-capable" content="yes">
     <title>{title}</title>
     <link rel="stylesheet" href="mosaic-widget.css?v={timestamp}">
+    <style>
+        {year_filter_css}
+    </style>
     <script>
         // Initialize template variables for the JavaScript
         var yearFilterMinYear = {min_year};
@@ -171,8 +177,42 @@ where
             min_year = min_year,
             max_year = max_year,
             timestamp = timestamp,
-            title = title
+            title = title,
+            year_filter_css = year_filter_css
         ));
+    }
+
+    /// Generate CSS rules for year filtering
+    ///
+    /// This creates CSS rules that allow filtering tiles by year using a data attribute
+    /// on the container, avoiding the need to iterate through thousands of DOM elements.
+    fn generate_year_filter_css(&self, min_year: i32, max_year: i32) -> String {
+        let mut css = String::new();
+
+        // Base rule: when year filter is active, dim all tiles by default
+        css.push_str(
+            r#"/* Year filter CSS - generated dynamically based on tile years */
+        .zoom-container[data-filter-year] .tile-region {
+            pointer-events: none;
+            opacity: 0.3;
+        }
+        "#,
+        );
+
+        // Generate per-year rules: show tiles matching the selected year
+        for year in min_year..=max_year {
+            css.push_str(&format!(
+                r#"
+        .zoom-container[data-filter-year="{}"] .tile-region[data-year="{}"] {{
+            pointer-events: auto;
+            opacity: 1;
+        }}
+        "#,
+                year, year
+            ));
+        }
+
+        css
     }
 
     /// Generate distance overlay tiles

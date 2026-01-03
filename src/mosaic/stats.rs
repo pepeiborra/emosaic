@@ -331,6 +331,7 @@ mod tests {
             downsample: 1,
             randomize: None,
             tiles_dir: "test_tiles".to_string(),
+            title: "Test Mosaic".to_string(),
         };
 
         let mosaic_path = PathBuf::from("test_mosaic.jpg");

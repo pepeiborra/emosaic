@@ -1146,45 +1146,26 @@ function setupYearFilter() {
 
 function updateYearFilter(sliderValue) {
     const display = document.getElementById('year-display');
-    const tiles = document.querySelectorAll('.tile-region');
+    const zoomContainer = document.querySelector('.zoom-container');
 
-    if (!display || !tiles.length) {
-        console.log('Display or tiles not found for year filter');
+    if (!display || !zoomContainer) {
+        console.log('Display or zoom container not found for year filter');
         return;
     }
 
-    console.log('Updating year filter with value:', sliderValue, 'Total tiles:', tiles.length);
+    console.log('Updating year filter with value:', sliderValue);
 
     if (sliderValue === 0) {
-        // Show all tiles
+        // Show all tiles - remove the filter attribute
         display.textContent = 'All Years';
-        tiles.forEach(tile => {
-            if (tile.classList.contains('disabled')) {
-                tile.classList.remove('disabled');
-            }
-        });
-        console.log('Showing all tiles');
+        zoomContainer.removeAttribute('data-filter-year');
+        console.log('Showing all tiles (removed data-filter-year attribute)');
     } else {
-        // Filter by specific year
+        // Filter by specific year - set the filter attribute
         const selectedYear = yearFilterMinYear + sliderValue - 1;
         display.textContent = String(selectedYear);
-        console.log('Filtering by year:', selectedYear);
-
-        let enabledCount = 0;
-        let disabledCount = 0;
-
-        tiles.forEach(tile => {
-            const tileYear = tile.dataset.year;
-            if (tileYear === 'unknown' || parseInt(tileYear) !== selectedYear) {
-                    tile.classList.add('disabled');
-                disabledCount++;
-            } else {
-                    tile.classList.remove('disabled');
-                enabledCount++;
-            }
-        });
-
-        console.log('Year filter results - Enabled:', enabledCount, 'Disabled:', disabledCount);
+        zoomContainer.setAttribute('data-filter-year', selectedYear);
+        console.log('Filtering by year:', selectedYear, '(set data-filter-year attribute)');
     }
 };
 

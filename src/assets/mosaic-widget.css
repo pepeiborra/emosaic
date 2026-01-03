@@ -49,7 +49,7 @@ body {
 .tile-region {
     position: absolute;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: opacity 0.15s ease, background-color 0.2s ease, border 0.2s ease;
 }
 .tile-region:active {
     transform: scale(0.95);
