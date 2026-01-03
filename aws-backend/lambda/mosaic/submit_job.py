@@ -93,13 +93,14 @@ def lambda_handler(event, context):
         tile_size = str(params.get('tile_size', mosaic.get('tile_size', 32)))
         mode = str(params.get('mode', mosaic.get('mode', 16)))
         tint_opacity = str(params.get('tint_opacity', float(mosaic.get('tint_opacity', 0.5))))
-        no_repeat = str(params.get('no_repeat', False)).lower()
-        crop = str(params.get('crop', False)).lower()
-        randomize = str(params.get('randomize', 0))
+        no_repeat = str(params.get('no_repeat', mosaic.get('no_repeat', False))).lower()
+        crop = str(params.get('crop', mosaic.get('crop', False))).lower()
+        randomize = str(params.get('randomize', mosaic.get('randomize', 0)))
+        downsample = str(params.get('downsample', mosaic.get('downsample', 1)))
 
         # Build S3 paths
         source_image_key = mosaic.get('source_image_path', '').replace(f's3://{S3_BUCKET}/', '')
-        output_key = f'mosaics/{mosaic_id}/output.html'
+        output_prefix = f'mosaics/{mosaic_id}'
         tiles_prefix = mosaic.get('tiles_dir', 'tiles/').replace(f's3://{S3_BUCKET}/', '')
 
         if not source_image_key:
@@ -127,14 +128,15 @@ def lambda_handler(event, context):
                     {'name': 'MOSAIC_ID', 'value': mosaic_id},
                     {'name': 'S3_BUCKET', 'value': S3_BUCKET},
                     {'name': 'SOURCE_IMAGE_KEY', 'value': source_image_key},
-                    {'name': 'OUTPUT_KEY', 'value': output_key},
+                    {'name': 'OUTPUT_KEY', 'value': f'{output_prefix}/mosaic.png'},
                     {'name': 'TILES_PREFIX', 'value': tiles_prefix},
                     {'name': 'TILE_SIZE', 'value': tile_size},
                     {'name': 'MODE', 'value': mode},
                     {'name': 'TINT_OPACITY', 'value': tint_opacity},
                     {'name': 'NO_REPEAT', 'value': no_repeat},
                     {'name': 'CROP', 'value': crop},
-                    {'name': 'RANDOMIZE', 'value': randomize}
+                    {'name': 'RANDOMIZE', 'value': randomize},
+                    {'name': 'DOWNSAMPLE', 'value': downsample}
                 ]
             }
         )
@@ -155,7 +157,8 @@ def lambda_handler(event, context):
                 'tint_opacity': Decimal(tint_opacity),
                 'no_repeat': no_repeat == 'true',
                 'crop': crop == 'true',
-                'randomize': int(randomize)
+                'randomize': int(randomize),
+                'downsample': int(downsample)
             }
         }
 
@@ -177,7 +180,7 @@ def lambda_handler(event, context):
             ExpressionAttributeValues={
                 ':status': 'processing',
                 ':updated_at': now,
-                ':output_path': f's3://{S3_BUCKET}/{output_key}'
+                ':output_path': f's3://{S3_BUCKET}/{output_prefix}/'
             }
         )
 

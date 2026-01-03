@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use image::{ImageBuffer, Rgb, RgbImage};
+use serde::Serialize;
 
 use super::tiles::{Tile, TileSet};
 
@@ -18,6 +19,49 @@ pub struct MosaicConfig {
     pub randomize: Option<f64>,
     pub tiles_dir: String,
     pub title: String,
+}
+
+/// Serializable statistics about a generated mosaic
+#[derive(Debug, Clone, Serialize)]
+pub struct MosaicStatsJson {
+    /// Total number of tiles in the mosaic
+    pub total_tiles: usize,
+    /// Number of unique tile images used
+    pub unique_tiles: usize,
+    /// Average color distance (lower is better match)
+    pub avg_distance: f64,
+    /// Minimum color distance (best match)
+    pub min_distance: f64,
+    /// Maximum color distance (worst match)
+    pub max_distance: f64,
+    /// Number of columns in the mosaic grid
+    pub columns: u32,
+    /// Number of rows in the mosaic grid
+    pub rows: u32,
+    /// Top 10 most frequently used tiles
+    pub most_used: Vec<TileUsage>,
+    /// Top 10 worst color matches
+    pub worst_matches: Vec<TileMatch>,
+}
+
+/// Statistics about a tile's usage frequency
+#[derive(Debug, Clone, Serialize)]
+pub struct TileUsage {
+    /// Relative path to the tile image
+    pub path: String,
+    /// Number of times this tile was used
+    pub count: u16,
+}
+
+/// Statistics about a tile's color match quality
+#[derive(Debug, Clone, Serialize)]
+pub struct TileMatch {
+    /// Relative path to the tile image
+    pub path: String,
+    /// Color distance (higher = worse match)
+    pub distance: f64,
+    /// Grid position (column, row)
+    pub position: (u32, u32),
 }
 
 /// Statistics collector for mosaic rendering operations.
@@ -137,6 +181,103 @@ where
             );
         }
     }
+
+    /// Export statistics as a JSON-serializable struct.
+    ///
+    /// # Arguments
+    /// * `tile_set` - The tile set used for generating the mosaic
+    /// * `tile_size` - Size of each tile in pixels for grid calculation
+    ///
+    /// # Returns
+    /// A `MosaicStatsJson` struct that can be serialized to JSON
+    pub fn to_json<T>(&self, tile_set: &TileSet<T>, tile_size: u32) -> MosaicStatsJson {
+        if self.tiles.is_empty() {
+            return MosaicStatsJson {
+                total_tiles: 0,
+                unique_tiles: 0,
+                avg_distance: 0.0,
+                min_distance: 0.0,
+                max_distance: 0.0,
+                columns: 0,
+                rows: 0,
+                most_used: vec![],
+                worst_matches: vec![],
+            };
+        }
+
+        // Calculate distances and tile usage
+        let mut total_distance: f64 = 0.0;
+        let mut min_distance: f64 = f64::MAX;
+        let mut max_distance: f64 = 0.0;
+        let mut tile_usage_count: HashMap<&Path, u16> = HashMap::with_capacity(self.tiles.len());
+
+        for tile in self.tiles.values() {
+            let distance: f64 = tile.colors.into();
+            total_distance += distance;
+            min_distance = min_distance.min(distance);
+            max_distance = max_distance.max(distance);
+            let path = tile_set.get_path(tile);
+            *tile_usage_count.entry(path).or_insert(0) += 1;
+        }
+
+        let total_tiles = self.tiles.len();
+        let unique_tiles = tile_usage_count.len();
+        let avg_distance = total_distance / total_tiles as f64;
+
+        // Calculate grid dimensions
+        let max_x = self.tiles.keys().map(|(x, _)| *x).max().unwrap_or(0);
+        let max_y = self.tiles.keys().map(|(_, y)| *y).max().unwrap_or(0);
+        let columns = if tile_size > 0 { (max_x / tile_size) + 1 } else { 0 };
+        let rows = if tile_size > 0 { (max_y / tile_size) + 1 } else { 0 };
+
+        // Get top 10 most used tiles
+        let mut usage_by_count: Vec<_> = tile_usage_count.into_iter().collect();
+        usage_by_count.sort_by(|(_, a), (_, b)| b.cmp(a));
+        let most_used: Vec<TileUsage> = usage_by_count
+            .into_iter()
+            .take(10)
+            .map(|(path, count)| TileUsage {
+                path: path.display().to_string(),
+                count,
+            })
+            .collect();
+
+        // Get top 10 worst matches with positions
+        let mut worst_with_pos: Vec<_> = self.tiles.iter().collect();
+        worst_with_pos.sort_by(|(_, a), (_, b)| {
+            let dist_a: f64 = a.colors.into();
+            let dist_b: f64 = b.colors.into();
+            dist_b.partial_cmp(&dist_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let worst_matches: Vec<TileMatch> = worst_with_pos
+            .into_iter()
+            .take(10)
+            .map(|((x, y), tile)| {
+                let path = tile_set.get_path(tile);
+                let distance: f64 = tile.colors.into();
+                let col = if tile_size > 0 { *x / tile_size } else { 0 };
+                let row = if tile_size > 0 { *y / tile_size } else { 0 };
+                TileMatch {
+                    path: path.display().to_string(),
+                    distance,
+                    position: (col, row),
+                }
+            })
+            .collect();
+
+        MosaicStatsJson {
+            total_tiles,
+            unique_tiles,
+            avg_distance,
+            min_distance,
+            max_distance,
+            columns,
+            rows,
+            most_used,
+            worst_matches,
+        }
+    }
+
     /// Render a grayscale visualization of tile color distances.
     ///
     /// Creates an image where each pixel's brightness represents how well

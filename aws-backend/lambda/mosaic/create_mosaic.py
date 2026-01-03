@@ -43,33 +43,25 @@ def lambda_handler(event, context):
         # Parse request body
         body = json.loads(event['body'])
 
-        # Validate required fields
-        if 'title' not in body:
-            return {
-                'statusCode': 400,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': cors_origin,
-                    'Access-Control-Allow-Credentials': 'true'
-                },
-                'body': json.dumps({
-                    'error': 'Bad request',
-                    'message': 'Missing required field: title'
-                })
-            }
-
         # Generate unique ID and timestamp
         mosaic_id = str(uuid.uuid4())
         now = datetime.utcnow().isoformat() + 'Z'
 
-        # Build mosaic item
+        # Extract config from body (frontend sends nested config object)
+        config = body.get('config', {})
+
+        # Build mosaic item - store config as nested object to match frontend expectations
         item = {
             'id': mosaic_id,
-            'title': body['title'],
+            'title': body.get('title', ''),
             'description': body.get('description', ''),
-            'tile_size': int(body.get('tile_size', 32)),
-            'mode': int(body.get('mode', 16)),
-            'tint_opacity': Decimal(str(body.get('tint_opacity', 0.5))),
+            # Store individual fields for backward compatibility with batch job
+            'tile_size': int(config.get('tile_size', body.get('tile_size', 32))),
+            'mode': int(config.get('mode', body.get('mode', 16))),
+            'tint_opacity': Decimal(str(config.get('tint_opacity', body.get('tint_opacity', 0.5)))),
+            'no_repeat': config.get('no_repeat', body.get('no_repeat', False)),
+            'crop': config.get('crop', body.get('crop', False)),
+            'downsample': int(config.get('downsample', body.get('downsample', 1))),
             'is_main': 1 if body.get('is_main', False) else 0,
             'created_at': now,
             'updated_at': now,

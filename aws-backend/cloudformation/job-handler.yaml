@@ -31,6 +31,8 @@ Resources:
             Fn::Sub: '${Environment}-mosaic-jobs-table'
           MOSAICS_TABLE: !ImportValue
             Fn::Sub: '${Environment}-mosaics-table'
+          S3_BUCKET: !ImportValue
+            Fn::Sub: '${Environment}-emosaic-tiles-bucket'
       Timeout: 60
 
   # Permission for EventBridge to invoke Lambda

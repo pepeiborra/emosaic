@@ -4,6 +4,34 @@
 
 set -e
 
+# Function to write structured error and exit
+write_error_and_exit() {
+    local error_code="$1"
+    local error_message="$2"
+
+    echo "ERROR: $error_message"
+
+    # Create error JSON
+    ERROR_FILE="/app/output/error.json"
+    mkdir -p /app/output
+    cat > "$ERROR_FILE" <<EOF
+{
+  "error_code": "$error_code",
+  "error_message": "$error_message"
+}
+EOF
+
+    # Upload error.json to S3 if we have the necessary variables
+    if [ -n "$S3_BUCKET" ] && [ -n "$OUTPUT_KEY" ]; then
+        OUTPUT_PREFIX=$(dirname "$OUTPUT_KEY")
+        echo "Uploading error information to S3..."
+        aws s3 cp "$ERROR_FILE" "s3://$S3_BUCKET/$OUTPUT_PREFIX/error.json" \
+            --content-type "application/json" || true
+    fi
+
+    exit 1
+}
+
 echo "=== Emosaic Container Starting ==="
 echo "Job ID: ${JOB_ID:-unknown}"
 echo "Mosaic ID: ${MOSAIC_ID:-unknown}"
@@ -25,6 +53,7 @@ TINT_OPACITY="${TINT_OPACITY:-0.5}"
 NO_REPEAT="${NO_REPEAT:-false}"
 CROP="${CROP:-false}"
 RANDOMIZE="${RANDOMIZE:-0}"
+DOWNSAMPLE="${DOWNSAMPLE:-1}"
 
 echo ""
 echo "=== Configuration ==="
@@ -38,15 +67,17 @@ echo "Tint Opacity: $TINT_OPACITY"
 echo "No Repeat: $NO_REPEAT"
 echo "Crop: $CROP"
 echo "Randomize: $RANDOMIZE"
+echo "Downsample: $DOWNSAMPLE"
 
 # Step 1: Download source image
 echo ""
 echo "=== Step 1: Downloading source image ==="
 SOURCE_FILE="/app/tmp/source_image.jpg"
-aws s3 cp "s3://$S3_BUCKET/$SOURCE_IMAGE_KEY" "$SOURCE_FILE"
+if ! aws s3 cp "s3://$S3_BUCKET/$SOURCE_IMAGE_KEY" "$SOURCE_FILE"; then
+    write_error_and_exit "MISSING_SOURCE_IMAGE" "Failed to download source image from s3://$S3_BUCKET/$SOURCE_IMAGE_KEY"
+fi
 if [ ! -f "$SOURCE_FILE" ]; then
-    echo "ERROR: Failed to download source image"
-    exit 1
+    write_error_and_exit "MISSING_SOURCE_IMAGE" "Source image file not found after download"
 fi
 echo "Downloaded: $(du -h $SOURCE_FILE | cut -f1)"
 
@@ -54,26 +85,29 @@ echo "Downloaded: $(du -h $SOURCE_FILE | cut -f1)"
 echo ""
 echo "=== Step 2: Downloading tiles ==="
 echo "Syncing from s3://$S3_BUCKET/$TILES_PREFIX to $TILES_DIR"
-aws s3 sync "s3://$S3_BUCKET/$TILES_PREFIX" "$TILES_DIR" --quiet
+# Exclude cache files (.emosaic_*) as they contain absolute paths from local builds
+if ! aws s3 sync "s3://$S3_BUCKET/$TILES_PREFIX" "$TILES_DIR" --quiet --exclude ".emosaic_*" --exclude "*/.emosaic_*"; then
+    write_error_and_exit "MISSING_TILES" "Failed to sync tiles from s3://$S3_BUCKET/$TILES_PREFIX"
+fi
 TILE_COUNT=$(find "$TILES_DIR" -type f \( -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" \) | wc -l)
 echo "Downloaded $TILE_COUNT tiles"
 
 if [ "$TILE_COUNT" -eq 0 ]; then
-    echo "ERROR: No tiles found in $TILES_DIR"
-    exit 1
+    write_error_and_exit "MISSING_TILES" "No tile images found in s3://$S3_BUCKET/$TILES_PREFIX"
 fi
 
 # Step 3: Run mosaic generation
 echo ""
 echo "=== Step 3: Generating mosaic ==="
-OUTPUT_FILE="/app/output/mosaic.html"
+OUTPUT_DIR="/app/output"
+OUTPUT_IMAGE="$OUTPUT_DIR/mosaic.png"
 
 # Build command arguments
 # Global options (before subcommand): --tile-size, --crop, -o
 # Subcommand options (after 'mosaic'): --mode, --tint-opacity, --web, --no-repeat, --randomize
 CMD_ARGS=(
     "--tile-size" "$TILE_SIZE"
-    "-o" "$OUTPUT_FILE"
+    "-o" "$OUTPUT_IMAGE"
 )
 
 # Add --crop before subcommand if enabled
@@ -89,6 +123,9 @@ CMD_ARGS+=(
     "--mode" "$MODE"
     "--tint-opacity" "$TINT_OPACITY"
     "--web"
+    "--extensions" "jpg"
+    "--extensions" "jpeg"
+    "--extensions" "png"
 )
 
 # Add subcommand optional flags
@@ -100,26 +137,98 @@ if [ "$RANDOMIZE" != "0" ]; then
     CMD_ARGS+=("--randomize" "$RANDOMIZE")
 fi
 
-# Run emosaic
-echo "Command: /app/emosaic ${CMD_ARGS[*]}"
-/app/emosaic "${CMD_ARGS[@]}"
-
-if [ ! -f "$OUTPUT_FILE" ]; then
-    echo "ERROR: Mosaic generation failed - output file not created"
-    exit 1
+if [ "$DOWNSAMPLE" != "1" ]; then
+    CMD_ARGS+=("--downsample" "$DOWNSAMPLE")
 fi
 
-OUTPUT_SIZE=$(du -h "$OUTPUT_FILE" | cut -f1)
-echo "Mosaic generated successfully: $OUTPUT_SIZE"
+# Run emosaic
+echo "Command: /app/emosaic ${CMD_ARGS[*]}"
+if ! /app/emosaic "${CMD_ARGS[@]}" 2>&1 | tee /app/output/generation.log; then
+    # Check the log for specific error patterns
+    if grep -q "Need.*tiles but only.*available" /app/output/generation.log 2>/dev/null; then
+        # Extract the error message from the log
+        TILE_ERROR=$(grep "Need.*tiles but only.*available" /app/output/generation.log | head -1)
+        write_error_and_exit "INSUFFICIENT_TILES" "$TILE_ERROR"
+    else
+        write_error_and_exit "GENERATION_FAILED" "Mosaic generation command failed. See CloudWatch logs for details."
+    fi
+fi
 
-# Step 4: Upload output to S3
+if [ ! -f "$OUTPUT_IMAGE" ]; then
+    write_error_and_exit "GENERATION_FAILED" "Mosaic generation completed but output image was not created"
+fi
+
+OUTPUT_SIZE=$(du -h "$OUTPUT_IMAGE" | cut -f1)
+echo "Mosaic image generated successfully: $OUTPUT_SIZE"
+
+# List all generated files
+echo "Generated files:"
+ls -la "$OUTPUT_DIR"
+
+# Step 4: Upload outputs to S3
 echo ""
-echo "=== Step 4: Uploading output ==="
-aws s3 cp "$OUTPUT_FILE" "s3://$S3_BUCKET/$OUTPUT_KEY" \
-    --content-type "text/html" \
-    --metadata "mosaic-id=${MOSAIC_ID:-unknown},job-id=${JOB_ID:-unknown}"
+echo "=== Step 4: Uploading outputs ==="
 
-echo "Uploaded to s3://$S3_BUCKET/$OUTPUT_KEY"
+# Derive the output prefix from OUTPUT_KEY (remove filename, keep directory)
+OUTPUT_PREFIX=$(dirname "$OUTPUT_KEY")
+
+# Upload the main mosaic image (PNG)
+echo "Uploading mosaic image..."
+if ! aws s3 cp "$OUTPUT_IMAGE" "s3://$S3_BUCKET/$OUTPUT_PREFIX/mosaic.png" \
+    --content-type "image/png" \
+    --metadata "mosaic-id=${MOSAIC_ID:-unknown},job-id=${JOB_ID:-unknown}"; then
+    write_error_and_exit "UPLOAD_FAILED" "Failed to upload mosaic.png to s3://$S3_BUCKET/$OUTPUT_PREFIX/"
+fi
+
+# Upload HTML file if it exists
+HTML_FILE="$OUTPUT_DIR/mosaic.html"
+if [ -f "$HTML_FILE" ]; then
+    echo "Uploading HTML file..."
+    aws s3 cp "$HTML_FILE" "s3://$S3_BUCKET/$OUTPUT_PREFIX/mosaic.html" \
+        --content-type "text/html"
+fi
+
+# Upload widget HTML if it exists
+WIDGET_FILE="$OUTPUT_DIR/mosaic_widget.html"
+if [ -f "$WIDGET_FILE" ]; then
+    echo "Uploading widget HTML..."
+    aws s3 cp "$WIDGET_FILE" "s3://$S3_BUCKET/$OUTPUT_PREFIX/mosaic_widget.html" \
+        --content-type "text/html"
+fi
+
+# Upload CSS if it exists
+CSS_FILE="$OUTPUT_DIR/mosaic-widget.css"
+if [ -f "$CSS_FILE" ]; then
+    echo "Uploading CSS..."
+    aws s3 cp "$CSS_FILE" "s3://$S3_BUCKET/$OUTPUT_PREFIX/mosaic-widget.css" \
+        --content-type "text/css"
+fi
+
+# Upload JavaScript if it exists
+JS_FILE="$OUTPUT_DIR/mosaic-widget.js"
+if [ -f "$JS_FILE" ]; then
+    echo "Uploading JavaScript..."
+    aws s3 cp "$JS_FILE" "s3://$S3_BUCKET/$OUTPUT_PREFIX/mosaic-widget.js" \
+        --content-type "application/javascript"
+fi
+
+# Upload stats image if it exists
+STATS_FILE="$OUTPUT_DIR/mosaic.stats.png"
+if [ -f "$STATS_FILE" ]; then
+    echo "Uploading stats image..."
+    aws s3 cp "$STATS_FILE" "s3://$S3_BUCKET/$OUTPUT_PREFIX/mosaic.stats.png" \
+        --content-type "image/png"
+fi
+
+# Upload stats JSON if it exists
+STATS_JSON_FILE="$OUTPUT_DIR/mosaic.stats.json"
+if [ -f "$STATS_JSON_FILE" ]; then
+    echo "Uploading stats JSON..."
+    aws s3 cp "$STATS_JSON_FILE" "s3://$S3_BUCKET/$OUTPUT_PREFIX/mosaic.stats.json" \
+        --content-type "application/json"
+fi
+
+echo "All files uploaded to s3://$S3_BUCKET/$OUTPUT_PREFIX/"
 
 # Optional: Generate and upload thumbnail (extract from HTML or generate separately)
 # This would be a future enhancement

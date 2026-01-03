@@ -1,45 +1,176 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useMutation } from '@tanstack/react-query';
-import { createMosaic, getUploadUrl, uploadFileToS3, submitJob } from '../services/api';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { createMosaic, getUploadUrl, uploadFileToS3, submitJob, getTileCount } from '../services/api';
 import type { MosaicConfig } from '../types/api';
 
-const TILE_SIZES = [16, 32, 64];
+const TILE_SIZES = [16, 32, 64, 128, 256];
+const DOWNSAMPLE_OPTIONS = [1, 2, 4, 8, 16, 32, 64, 256];
 const MODES = [
-  { value: 1, label: '1 (Fastest, single color match)' },
-  { value: 4, label: '4 (2x2 grid matching)' },
-  { value: 9, label: '9 (3x3 grid matching)' },
-  { value: 16, label: '16 (4x4 grid matching)' },
-  { value: 25, label: '25 (5x5 grid matching)' },
-  { value: 32, label: '32 (Best quality)' },
+  { value: 1, label: '1 (1x1, single color match)' },
+  { value: 2, label: '2 (2x2 grid matching)' },
+  { value: 3, label: '3 (3x3 grid matching)' },
+  { value: 4, label: '4 (4x4 grid matching)' },
+  { value: 5, label: '5 (5x5 grid matching)' },
+  { value: 6, label: '6 (6x6 grid matching)' },
+  { value: 8, label: '8 (8x8 grid matching)' },
+  { value: 16, label: '16 (16x16 grid matching)' },
+  { value: 32, label: '32 (32x32 grid matching, best quality)' },
   { value: 0, label: 'Random (ignore source)' },
 ];
+
+interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+interface MosaicStats {
+  columns: number;
+  rows: number;
+  totalTiles: number;
+  outputWidth: number;
+  outputHeight: number;
+  adjustedWidth: number;
+  adjustedHeight: number;
+}
+
+/**
+ * Adjust a dimension to be a multiple of dim, using the same rounding logic as Rust.
+ * Rust uses: if (mod > dim.div_euclid(2)) round up, else round down
+ * This means ties (e.g., mod == dim/2) round DOWN, not up.
+ */
+function adjustToMultiple(value: number, dim: number): number {
+  const mod = value % dim;
+  const halfDim = Math.floor(dim / 2);
+  if (mod > halfDim) {
+    return value + (dim - mod); // round up
+  } else {
+    return value - mod; // round down
+  }
+}
+
+/**
+ * Calculate mosaic statistics based on image dimensions and config.
+ * Mirrors the logic in src/main.rs n_to_1 function.
+ */
+function calculateMosaicStats(
+  dimensions: ImageDimensions,
+  mode: number,
+  tileSize: number,
+  downsample: number = 1
+): MosaicStats {
+  const { width, height } = dimensions;
+
+  // Apply downsampling factor first (matches Rust logic)
+  const downsampledWidth = Math.floor(width / downsample);
+  const downsampledHeight = Math.floor(height / downsample);
+
+  // dim = mode directly (mode specifies the grid dimension)
+  // For random mode (0), treat as 1-to-1
+  const dim = mode === 0 ? 1 : mode;
+
+  // Adjust dimensions to be multiples of dim (matches Rust logic exactly)
+  const adjustedWidth = adjustToMultiple(downsampledWidth, dim);
+  const adjustedHeight = adjustToMultiple(downsampledHeight, dim);
+
+  // Calculate grid size - number of tiles in each direction
+  const columns = Math.floor(adjustedWidth / dim);
+  const rows = Math.floor(adjustedHeight / dim);
+  const totalTiles = columns * rows;
+
+  // Calculate output dimensions
+  const outputWidth = columns * tileSize;
+  const outputHeight = rows * tileSize;
+
+  return {
+    columns,
+    rows,
+    totalTiles,
+    outputWidth,
+    outputHeight,
+    adjustedWidth,
+    adjustedHeight,
+  };
+}
+
+/**
+ * Get image dimensions from a File object
+ */
+function getImageDimensions(file: File): Promise<ImageDimensions> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(img.src);
+      resolve({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(img.src);
+      reject(new Error('Failed to load image'));
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/**
+ * Format a number with thousands separators
+ */
+function formatNumber(n: number): string {
+  return n.toLocaleString();
+}
+
+/**
+ * Format bytes as human-readable size
+ */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 export function CreateMosaic() {
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [imageDimensions, setImageDimensions] = useState<ImageDimensions | null>(null);
   const [title, setTitle] = useState('');
+  // Hardcoded tiles directory - implementation detail
+  const tilesDir = 'tiles/';
   const [config, setConfig] = useState<MosaicConfig>({
     tile_size: 32,
-    mode: 16,
+    mode: 4,
     tint_opacity: 0.3,
     no_repeat: false,
     crop: false,
+    downsample: 1,
   });
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
 
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  // Fetch tile count
+  const { data: tileCountData } = useQuery({
+    queryKey: ['tileCount', tilesDir],
+    queryFn: () => getTileCount(tilesDir),
+    enabled: !!tilesDir,
+  });
+
+  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
       setFile(selectedFile);
       const reader = new FileReader();
       reader.onload = (e) => setPreview(e.target?.result as string);
       reader.readAsDataURL(selectedFile);
+
+      // Extract image dimensions
+      try {
+        const dims = await getImageDimensions(selectedFile);
+        setImageDimensions(dims);
+      } catch {
+        setImageDimensions(null);
+      }
     }
   }, []);
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
     const droppedFile = e.dataTransfer.files[0];
     if (droppedFile && droppedFile.type.startsWith('image/')) {
@@ -47,6 +178,14 @@ export function CreateMosaic() {
       const reader = new FileReader();
       reader.onload = (e) => setPreview(e.target?.result as string);
       reader.readAsDataURL(droppedFile);
+
+      // Extract image dimensions
+      try {
+        const dims = await getImageDimensions(droppedFile);
+        setImageDimensions(dims);
+      } catch {
+        setImageDimensions(null);
+      }
     }
   }, []);
 
@@ -68,6 +207,7 @@ export function CreateMosaic() {
         title: title || undefined,
         source_image_path: s3_key,
         config,
+        tiles_dir: tilesDir,
       });
 
       // Step 4: Submit job
@@ -88,6 +228,31 @@ export function CreateMosaic() {
     e.preventDefault();
     createMutation.mutate();
   };
+
+  // Calculate mosaic statistics when image and config are available
+  const mosaicStats = useMemo(() => {
+    if (!imageDimensions) return null;
+    return calculateMosaicStats(imageDimensions, config.mode, config.tile_size, config.downsample ?? 1);
+  }, [imageDimensions, config.mode, config.tile_size, config.downsample]);
+
+  // Check if no-repeat mode requires more tiles than available
+  const noRepeatValidation = useMemo(() => {
+    if (!config.no_repeat || !mosaicStats || !tileCountData) {
+      return { isValid: true, message: null };
+    }
+
+    const requiredTiles = mosaicStats.totalTiles;
+    const availableTiles = tileCountData.count;
+
+    if (availableTiles < requiredTiles) {
+      return {
+        isValid: false,
+        message: `No-repeat mode requires ${formatNumber(requiredTiles)} tiles, but only ${formatNumber(availableTiles)} are available. Either reduce image size, increase downsample, or disable no-repeat.`
+      };
+    }
+
+    return { isValid: true, message: null };
+  }, [config.no_repeat, mosaicStats, tileCountData]);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -126,6 +291,7 @@ export function CreateMosaic() {
                     e.stopPropagation();
                     setFile(null);
                     setPreview(null);
+                    setImageDimensions(null);
                   }}
                   className="text-sm text-red-600 hover:text-red-700"
                 >
@@ -200,6 +366,28 @@ export function CreateMosaic() {
           </p>
         </div>
 
+        {/* Downsample */}
+        <div>
+          <label htmlFor="downsample" className="block text-sm font-medium text-gray-700 mb-2">
+            Downsample Factor
+          </label>
+          <select
+            id="downsample"
+            value={config.downsample ?? 1}
+            onChange={(e) => setConfig({ ...config, downsample: Number(e.target.value) })}
+            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2 border"
+          >
+            {DOWNSAMPLE_OPTIONS.map((factor) => (
+              <option key={factor} value={factor}>
+                {factor === 1 ? '1× (no downsampling)' : `${factor}× (1/${factor} resolution)`}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-gray-500">
+            Higher values reduce output size and processing time
+          </p>
+        </div>
+
         {/* Mode */}
         <div>
           <label htmlFor="mode" className="block text-sm font-medium text-gray-700 mb-2">
@@ -270,6 +458,78 @@ export function CreateMosaic() {
           </div>
         </div>
 
+        {/* Mosaic Statistics */}
+        {mosaicStats && imageDimensions && (
+          <div className="rounded-lg bg-gray-50 border border-gray-200 p-4">
+            <h3 className="text-sm font-medium text-gray-900 mb-3">
+              Mosaic Preview
+            </h3>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-gray-500">Source Image</p>
+                <p className="font-medium text-gray-900">
+                  {formatNumber(imageDimensions.width)} × {formatNumber(imageDimensions.height)} px
+                </p>
+                {file && (
+                  <p className="text-xs text-gray-400">{formatFileSize(file.size)}</p>
+                )}
+              </div>
+              <div>
+                <p className="text-gray-500">Output Size</p>
+                <p className="font-medium text-gray-900">
+                  {formatNumber(mosaicStats.outputWidth)} × {formatNumber(mosaicStats.outputHeight)} px
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-500">Tiles per Row</p>
+                <p className="font-medium text-gray-900">
+                  {formatNumber(mosaicStats.columns)}
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-500">Tiles per Column</p>
+                <p className="font-medium text-gray-900">
+                  {formatNumber(mosaicStats.rows)}
+                </p>
+              </div>
+              <div className="col-span-2 pt-2 border-t border-gray-200">
+                <p className="text-gray-500">Total Tiles</p>
+                <p className="font-medium text-gray-900">
+                  {formatNumber(mosaicStats.totalTiles)}
+                  <span className="text-xs text-gray-400 ml-2">
+                    ({formatNumber(mosaicStats.columns)} × {formatNumber(mosaicStats.rows)})
+                  </span>
+                </p>
+              </div>
+              {tileCountData && config.no_repeat && (
+                <div className="col-span-2 pt-2 border-t border-gray-200">
+                  <p className="text-gray-500">Available Tiles</p>
+                  <p className="font-medium text-gray-900">
+                    {formatNumber(tileCountData.count)}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* No-Repeat Validation Warning */}
+        {!noRepeatValidation.isValid && (
+          <div className="rounded-md bg-yellow-50 border border-yellow-200 p-4">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-yellow-800">Insufficient tiles for no-repeat mode</h3>
+                <p className="mt-1 text-sm text-yellow-700">{noRepeatValidation.message}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Error Message */}
         {createMutation.error && (
           <div className="rounded-md bg-red-50 p-4">
@@ -302,7 +562,7 @@ export function CreateMosaic() {
           </button>
           <button
             type="submit"
-            disabled={!file || createMutation.isPending}
+            disabled={!file || createMutation.isPending || !noRepeatValidation.isValid}
             className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {createMutation.isPending ? 'Creating...' : 'Create Mosaic'}

@@ -15,7 +15,16 @@ set -e
 
 ENVIRONMENT=${ENVIRONMENT:-prod}
 REGION=${AWS_REGION:-eu-west-3}
-CORS_ORIGIN=${CORS_ORIGIN:-https://casadelmanco.com}
+
+# Auto-detect CORS origin based on environment if not explicitly set
+if [ -z "$CORS_ORIGIN" ]; then
+    if [ "$ENVIRONMENT" = "prod" ]; then
+        CORS_ORIGIN="https://casadelmanco.com"
+    else
+        CORS_ORIGIN="https://${ENVIRONMENT}.casadelmanco.com"
+    fi
+fi
+
 ADMIN_EMAIL=${ADMIN_EMAIL:-}
 VPC_ID=${VPC_ID:-}
 SUBNET_IDS=${SUBNET_IDS:-}
@@ -338,6 +347,7 @@ zip -q -r ../../update_mosaic.zip update_mosaic.py
 zip -q -r ../../delete_mosaic.zip delete_mosaic.py
 zip -q -r ../../submit_job.zip submit_job.py
 zip -q -r ../../get_job.zip get_job.py
+zip -q -r ../../get_tile_count.zip get_tile_count.py
 
 cd ../..
 
@@ -368,6 +378,7 @@ UPDATE_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --
 DELETE_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='DeleteMosaicFunctionName'].OutputValue" --output text --region $REGION)
 SUBMIT_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='SubmitJobFunctionName'].OutputValue" --output text --region $REGION)
 GETJOB_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='GetJobFunctionName'].OutputValue" --output text --region $REGION)
+GET_TILE_COUNT_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='GetTileCountFunctionName'].OutputValue" --output text --region $REGION)
 
 aws lambda update-function-code --function-name $LIST_FN --zip-file fileb://list_mosaics.zip --region $REGION > /dev/null
 aws lambda update-function-code --function-name $GET_FN --zip-file fileb://get_mosaic.zip --region $REGION > /dev/null
@@ -376,8 +387,9 @@ aws lambda update-function-code --function-name $UPDATE_FN --zip-file fileb://up
 aws lambda update-function-code --function-name $DELETE_FN --zip-file fileb://delete_mosaic.zip --region $REGION > /dev/null
 aws lambda update-function-code --function-name $SUBMIT_FN --zip-file fileb://submit_job.zip --region $REGION > /dev/null
 aws lambda update-function-code --function-name $GETJOB_FN --zip-file fileb://get_job.zip --region $REGION > /dev/null
+aws lambda update-function-code --function-name $GET_TILE_COUNT_FN --zip-file fileb://get_tile_count.zip --region $REGION > /dev/null
 
-rm -f list_mosaics.zip get_mosaic.zip create_mosaic.zip update_mosaic.zip delete_mosaic.zip submit_job.zip get_job.zip
+rm -f list_mosaics.zip get_mosaic.zip create_mosaic.zip update_mosaic.zip delete_mosaic.zip submit_job.zip get_job.zip get_tile_count.zip
 
 echo ""
 echo "====================================================================="
@@ -488,6 +500,7 @@ if [ -n "$CUSTOM_DOMAIN" ] && [ -n "$CERTIFICATE_ARN" ]; then
             CustomDomain="$CUSTOM_DOMAIN" \
             CertificateArn="$CERTIFICATE_ARN" \
             HostedZoneId="$HOSTED_ZONE_ID" \
+            TilesBucketName="$EXISTING_TILES_BUCKET" \
         --region $REGION
 else
     aws cloudformation deploy \
@@ -495,6 +508,7 @@ else
         --stack-name $STACK_ADMIN_UI \
         --parameter-overrides \
             Environment=$ENVIRONMENT \
+            TilesBucketName="$EXISTING_TILES_BUCKET" \
         --region $REGION
 fi
 
@@ -503,6 +517,41 @@ if [ $? -eq 0 ]; then
 else
     echo "❌ Admin UI deployment failed"
     exit 1
+fi
+
+# Update tiles bucket policy to allow CloudFront access via OAC
+echo ""
+echo "Updating tiles bucket policy for CloudFront access..."
+ADMIN_DISTRIBUTION_ID=$(aws cloudformation describe-stacks --stack-name $STACK_ADMIN_UI --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text --region $REGION)
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+# Check if policy already has a statement for this distribution
+EXISTING_POLICY=$(aws s3api get-bucket-policy --bucket $EXISTING_TILES_BUCKET --query Policy --output text 2>/dev/null || echo "")
+
+if echo "$EXISTING_POLICY" | grep -q "$ADMIN_DISTRIBUTION_ID" 2>/dev/null; then
+    echo "   Tiles bucket policy already configured for this distribution. Skipping."
+else
+    # Create the new policy statement
+    NEW_STATEMENT="{\"Sid\":\"AllowCloudFrontServicePrincipal-${ENVIRONMENT}\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"cloudfront.amazonaws.com\"},\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::${EXISTING_TILES_BUCKET}/*\",\"Condition\":{\"StringEquals\":{\"AWS:SourceArn\":\"arn:aws:cloudfront::${AWS_ACCOUNT_ID}:distribution/${ADMIN_DISTRIBUTION_ID}\"}}}"
+
+    if [ -z "$EXISTING_POLICY" ]; then
+        # No existing policy - create new one
+        UPDATED_POLICY="{\"Version\":\"2012-10-17\",\"Statement\":[$NEW_STATEMENT]}"
+    else
+        # Merge with existing policy
+        UPDATED_POLICY=$(echo "$EXISTING_POLICY" | jq --argjson stmt "$NEW_STATEMENT" '.Statement += [$stmt]')
+    fi
+
+    # Write to temp file and apply
+    echo "$UPDATED_POLICY" > /tmp/tiles-bucket-policy.json
+    if aws s3api put-bucket-policy --bucket $EXISTING_TILES_BUCKET --policy file:///tmp/tiles-bucket-policy.json; then
+        echo "   ✅ Tiles bucket policy updated for CloudFront access"
+    else
+        echo "   ⚠️  Failed to update tiles bucket policy. You may need to add it manually."
+        echo "   Policy statement needed:"
+        echo "$NEW_STATEMENT" | jq .
+    fi
+    rm -f /tmp/tiles-bucket-policy.json
 fi
 
 # Only add /admin/* route to main CloudFront for prod (when no custom domain)
@@ -751,6 +800,9 @@ echo "    DELETE $API_URL/jobs/{id}/cancel          - Cancel running job"
 echo ""
 echo "  File Upload (require Cognito auth):"
 echo "    POST   $API_URL/upload-url                - Get presigned URL for S3 upload"
+echo ""
+echo "  Tiles (require Cognito auth):"
+echo "    GET    $API_URL/tiles/count               - Get tile count for validation"
 echo ""
 echo "🎉 Deployment completed successfully!"
 echo ""

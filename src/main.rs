@@ -437,6 +437,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(ImgAndStats {
                         img: render_random(&img, tile_set, tile_size),
                         stats_img: None,
+                        stats_json: None,
                         html_generator: None,
                     })
                 }
@@ -507,6 +508,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("📊 Statistics file saved (shows tile matching quality)");
             }
 
+            // Save JSON stats if available
+            if let Some(stats_json) = img_and_stats.stats_json {
+                let json_path = output_path.with_extension("stats.json");
+                eprintln!(
+                    "📊 Writing statistics JSON to {}",
+                    json_path.display()
+                );
+                let json_str = serde_json::to_string_pretty(&stats_json)
+                    .map_err(|e| format!("Failed to serialize stats: {}", e))?;
+                fs::write(&json_path, json_str)
+                    .map_err(|e| format!("Failed to write stats JSON to {}: {}", json_path.display(), e))?;
+                eprintln!("📊 Statistics JSON saved");
+            }
+
             // Generate HTML file if requested
             if let Some(html_generator) = img_and_stats.html_generator {
                 let html_path = output_path.with_extension("html");
@@ -533,6 +548,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct ImgAndStats {
     img: image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
     stats_img: Option<image::ImageBuffer<image::Rgb<u8>, Vec<u8>>>,
+    stats_json: Option<mosaic::stats::MosaicStatsJson>,
     // Store HTML generation data as a closure that can be called later
     html_generator: Option<
         Box<dyn FnOnce(&std::path::Path, &std::path::Path) -> Result<(), std::io::Error> + Send>,
@@ -675,6 +691,7 @@ where
 
     // Clone for different uses
     let stats_for_render = stats.clone();
+    let stats_json = Some(stats.to_json(&tile_set, tile_size));
     let stats_img = Some(stats_for_render.render(tile_size));
 
     let html_generator = if html || web {
@@ -733,6 +750,7 @@ where
     Ok(ImgAndStats {
         img: image,
         stats_img,
+        stats_json,
         html_generator,
     })
 }

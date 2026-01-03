@@ -5,7 +5,41 @@ export interface MosaicConfig {
   no_repeat?: boolean;
   crop?: boolean;
   randomize?: number;
+  downsample?: number;
 }
+
+/** Statistics about a tile's usage frequency */
+export interface TileUsage {
+  path: string;
+  count: number;
+}
+
+/** Statistics about a tile's color match quality */
+export interface TileMatch {
+  path: string;
+  distance: number;
+  position: [number, number];
+}
+
+/** Statistics about a generated mosaic */
+export interface MosaicStats {
+  total_tiles: number;
+  unique_tiles: number;
+  avg_distance: number;
+  min_distance: number;
+  max_distance: number;
+  columns: number;
+  rows: number;
+  most_used: TileUsage[];
+  worst_matches: TileMatch[];
+}
+
+export type ErrorCode =
+  | 'INSUFFICIENT_TILES'
+  | 'MISSING_SOURCE_IMAGE'
+  | 'MISSING_TILES'
+  | 'GENERATION_FAILED'
+  | 'UPLOAD_FAILED';
 
 export interface Mosaic {
   id: string;
@@ -18,6 +52,10 @@ export interface Mosaic {
   source_image_path?: string;
   s3_path?: string;
   thumbnail_path?: string;
+  stats_image_path?: string;
+  stats?: MosaicStats;
+  error_code?: ErrorCode;
+  error_message?: string;
 }
 
 export interface Job {
@@ -27,6 +65,7 @@ export interface Job {
   started_at: string;
   completed_at?: string;
   error_message?: string;
+  error_code?: ErrorCode;
   batch_job_id?: string;
 }
 
@@ -45,6 +84,7 @@ export interface CreateMosaicRequest {
   title?: string;
   source_image_path: string;
   config: MosaicConfig;
+  tiles_dir?: string;
 }
 
 export interface SubmitJobRequest {

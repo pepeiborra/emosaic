@@ -138,3 +138,9 @@ export async function uploadFileToS3(
     throw new Error(`Upload failed: ${response.status}`);
   }
 }
+
+// Tiles endpoints
+export async function getTileCount(prefix = 'tiles/'): Promise<{ count: number; prefix: string }> {
+  const params = new URLSearchParams({ prefix });
+  return apiRequest(`/tiles/count?${params}`);
+}

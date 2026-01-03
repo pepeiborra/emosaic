@@ -20,7 +20,7 @@ function StatusBadge({ status }: { status: Mosaic['status'] }) {
 
 function MosaicCard({ mosaic }: { mosaic: Mosaic }) {
   const thumbnailUrl = mosaic.thumbnail_path
-    ? `${import.meta.env.VITE_API_URL?.replace('/prod', '')}/tiles/${mosaic.thumbnail_path}`
+    ? `/${mosaic.thumbnail_path}`
     : null;
 
   return (

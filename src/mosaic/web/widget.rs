@@ -1,10 +1,13 @@
-use std::fs;
 use std::io::Write;
 use std::path::Path;
 
 use sha2::{Sha256, Digest};
 use super::super::stats::{MosaicConfig, RenderStats};
 use super::super::tiles::TileSet;
+
+// Embed assets at compile time so the binary is self-contained
+const CSS_CONTENT: &str = include_str!("../../assets/mosaic-widget.css");
+const JS_CONTENT: &str = include_str!("../../assets/mosaic-widget.js");
 
 impl<D> RenderStats<D>
 where
@@ -106,19 +109,14 @@ where
     /// Copy CSS and JavaScript assets to output directory
     fn copy_assets_to_output_dir(&self, output_path: &Path) -> Result<(), std::io::Error> {
         let output_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
-        let assets_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/assets");
 
-        // Copy CSS file
-        let css_template_path = assets_dir.join("mosaic-widget.css");
-        let css_content = fs::read_to_string(&css_template_path)?;
+        // Write embedded CSS content
         let css_output_path = output_dir.join("mosaic-widget.css");
-        fs::write(&css_output_path, css_content)?;
+        std::fs::write(&css_output_path, CSS_CONTENT)?;
 
-        // Copy JavaScript file
-        let js_template_path = assets_dir.join("mosaic-widget.js");
-        let js_content = fs::read_to_string(&js_template_path)?;
+        // Write embedded JavaScript content
         let js_output_path = output_dir.join("mosaic-widget.js");
-        fs::write(&js_output_path, js_content)?;
+        std::fs::write(&js_output_path, JS_CONTENT)?;
 
         Ok(())
     }

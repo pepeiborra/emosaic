@@ -22,10 +22,26 @@ Parameters:
     Description: Route 53 Hosted Zone ID for DNS record. Required if CustomDomain is set.
     Default: ''
 
+  TilesBucketName:
+    Type: String
+    Description: Name of the S3 bucket containing tiles and mosaics
+    Default: 'emosaic-tiles-prod'
+
 Conditions:
   HasCustomDomain: !Not [!Equals [!Ref CustomDomain, '']]
 
 Resources:
+  # Origin Access Control for tiles bucket
+  TilesOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${Environment}-tiles-oac'
+        Description: OAC for accessing tiles bucket from CloudFront
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
   AdminUIBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -66,12 +82,40 @@ Resources:
             DomainName: !GetAtt AdminUIBucket.RegionalDomainName
             S3OriginConfig:
               OriginAccessIdentity: ''
+          - Id: TilesOrigin
+            DomainName: !Sub '${TilesBucketName}.s3.${AWS::Region}.amazonaws.com'
+            OriginAccessControlId: !GetAtt TilesOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
         Enabled: true
         DefaultRootObject: index.html
         Aliases: !If
           - HasCustomDomain
           - - !Ref CustomDomain
           - !Ref 'AWS::NoValue'
+        CacheBehaviors:
+          - PathPattern: '/mosaics/*'
+            TargetOriginId: TilesOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            Compress: true
+          - PathPattern: '/tiles/*'
+            TargetOriginId: TilesOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+            Compress: true
         DefaultCacheBehavior:
           TargetOriginId: S3Origin
           ViewerProtocolPolicy: redirect-to-https
@@ -148,3 +192,21 @@ Outputs:
     Value: !Sub 'https://${CustomDomain}'
     Export:
       Name: !Sub '${Environment}-emosaic-admin-custom-url'
+
+  TilesBucketPolicyStatement:
+    Description: 'Add this statement to the tiles bucket policy to allow CloudFront access'
+    Value: !Sub |
+      {
+        "Sid": "AllowCloudFrontServicePrincipal-${Environment}",
+        "Effect": "Allow",
+        "Principal": {
+          "Service": "cloudfront.amazonaws.com"
+        },
+        "Action": "s3:GetObject",
+        "Resource": "arn:aws:s3:::${TilesBucketName}/*",
+        "Condition": {
+          "StringEquals": {
+            "AWS:SourceArn": "arn:aws:cloudfront::${AWS::AccountId}:distribution/${AdminUIDistribution}"
+          }
+        }
+      }

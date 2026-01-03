@@ -21,6 +21,41 @@ class DecimalEncoder(json.JSONEncoder):
         return super(DecimalEncoder, self).default(obj)
 
 
+def transform_mosaic(item):
+    """Transform DynamoDB item to match frontend expected format."""
+    result = {
+        'id': item['id'],
+        'title': item.get('title'),
+        'status': item.get('status', 'pending'),
+        'is_main': item.get('is_main', 0) == 1,  # Convert to boolean
+        'created_at': item.get('created_at'),
+        'updated_at': item.get('updated_at'),
+        's3_path': item.get('s3_path'),
+        'thumbnail_path': item.get('thumbnail_path'),
+        'source_image_path': item.get('source_image_path'),
+        'stats_image_path': item.get('stats_image_path'),
+    }
+
+    # Include stats if available
+    if 'stats' in item:
+        result['stats'] = item['stats']
+
+    # Build config object from individual fields or nested config
+    if 'config' in item:
+        result['config'] = item['config']
+    else:
+        result['config'] = {
+            'tile_size': item.get('tile_size', 32),
+            'mode': item.get('mode', 16),
+            'tint_opacity': float(item.get('tint_opacity', 0.5)),
+            'no_repeat': item.get('no_repeat', False),
+            'crop': item.get('crop', False),
+            'downsample': item.get('downsample', 1),
+        }
+
+    return result
+
+
 def lambda_handler(event, context):
     """
     GET /mosaics/{mosaicId}?include_jobs=true
@@ -55,6 +90,9 @@ def lambda_handler(event, context):
 
         mosaic = response['Item']
 
+        # Transform to match frontend expected format
+        transformed_mosaic = transform_mosaic(mosaic)
+
         # Optionally include job history
         if include_jobs and jobs_table:
             try:
@@ -66,10 +104,10 @@ def lambda_handler(event, context):
                     Limit=10  # Last 10 jobs
                 )
 
-                mosaic['jobs'] = jobs_response.get('Items', [])
+                transformed_mosaic['jobs'] = jobs_response.get('Items', [])
             except Exception as e:
                 print(f"Warning: Failed to fetch jobs: {str(e)}")
-                mosaic['jobs'] = []
+                transformed_mosaic['jobs'] = []
 
         return {
             'statusCode': 200,
@@ -78,7 +116,7 @@ def lambda_handler(event, context):
                 'Access-Control-Allow-Origin': cors_origin,
                 'Access-Control-Allow-Credentials': 'true'
             },
-            'body': json.dumps(mosaic, cls=DecimalEncoder)
+            'body': json.dumps(transformed_mosaic, cls=DecimalEncoder)
         }
 
     except KeyError as e:
