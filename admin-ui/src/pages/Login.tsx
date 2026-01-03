@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { useTranslation } from '../i18n';
 
 type LoginMode = 'login' | 'newPassword' | 'forgotPassword' | 'resetPassword';
 
@@ -13,12 +14,49 @@ export function Login() {
   const [mode, setMode] = useState<LoginMode>('login');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const autoLoginAttempted = useRef(false);
 
   const { login, completeNewPassword, forgotPassword, confirmForgotPassword, error, clearError } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const t = useTranslation();
 
   const from = location.state?.from?.pathname || '/';
+
+  // Auto-fill and auto-login from URL params (invitation links)
+  useEffect(() => {
+    if (autoLoginAttempted.current) return;
+
+    const urlEmail = searchParams.get('u');
+    const urlPassword = searchParams.get('p');
+
+    if (urlEmail && urlPassword) {
+      autoLoginAttempted.current = true;
+      setEmail(urlEmail);
+      setPassword(urlPassword);
+
+      // Clear URL params for security (don't leave credentials in URL/history)
+      setSearchParams({}, { replace: true });
+
+      // Auto-submit login
+      (async () => {
+        setIsSubmitting(true);
+        try {
+          const result = await login(urlEmail, urlPassword);
+          if (result.needsNewPassword) {
+            setMode('newPassword');
+          } else {
+            navigate(from, { replace: true });
+          }
+        } catch {
+          // Error is handled by AuthContext, user can retry manually
+        } finally {
+          setIsSubmitting(false);
+        }
+      })();
+    }
+  }, [searchParams, setSearchParams, login, navigate, from]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,7 +107,7 @@ export function Login() {
     try {
       await forgotPassword(email);
       setMode('resetPassword');
-      setSuccessMessage('A verification code has been sent to your email');
+      setSuccessMessage(t.login.verificationCodeSent);
     } catch {
       // Error is handled by AuthContext
     } finally {
@@ -90,7 +128,7 @@ export function Login() {
 
     try {
       await confirmForgotPassword(email, resetCode, newPassword);
-      setSuccessMessage('Password reset successfully. Please sign in.');
+      setSuccessMessage(t.login.passwordResetSuccess);
       setMode('login');
       setPassword('');
       setNewPassword('');
@@ -119,10 +157,10 @@ export function Login() {
         <div className="max-w-md w-full space-y-8">
           <div>
             <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-              Set New Password
+              {t.login.setNewPassword}
             </h2>
             <p className="mt-2 text-center text-sm text-gray-600">
-              Your account requires a new password
+              {t.login.newPasswordRequired}
             </p>
           </div>
 
@@ -136,7 +174,7 @@ export function Login() {
             <div className="rounded-md shadow-sm -space-y-px">
               <div>
                 <label htmlFor="new-password" className="sr-only">
-                  New Password
+                  {t.login.newPassword}
                 </label>
                 <input
                   id="new-password"
@@ -144,7 +182,7 @@ export function Login() {
                   type="password"
                   required
                   className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                  placeholder="New Password"
+                  placeholder={t.login.newPassword}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   minLength={12}
@@ -152,7 +190,7 @@ export function Login() {
               </div>
               <div>
                 <label htmlFor="confirm-password" className="sr-only">
-                  Confirm Password
+                  {t.login.confirmPassword}
                 </label>
                 <input
                   id="confirm-password"
@@ -160,7 +198,7 @@ export function Login() {
                   type="password"
                   required
                   className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                  placeholder="Confirm Password"
+                  placeholder={t.login.confirmPassword}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   minLength={12}
@@ -169,11 +207,11 @@ export function Login() {
             </div>
 
             {newPassword && confirmPassword && newPassword !== confirmPassword && (
-              <p className="text-sm text-red-600">Passwords do not match</p>
+              <p className="text-sm text-red-600">{t.login.passwordsDoNotMatch}</p>
             )}
 
             <p className="text-xs text-gray-500">
-              Password must be at least 12 characters with uppercase, lowercase, numbers, and symbols.
+              {t.login.passwordRequirements}
             </p>
 
             <div>
@@ -182,7 +220,7 @@ export function Login() {
                 disabled={isSubmitting || newPassword !== confirmPassword}
                 className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting ? 'Setting password...' : 'Set Password'}
+                {isSubmitting ? t.login.settingPassword : t.login.setPassword}
               </button>
             </div>
           </form>
@@ -198,10 +236,10 @@ export function Login() {
         <div className="max-w-md w-full space-y-8">
           <div>
             <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-              Reset Password
+              {t.login.resetPassword}
             </h2>
             <p className="mt-2 text-center text-sm text-gray-600">
-              Enter your email to receive a verification code
+              {t.login.enterEmailForReset}
             </p>
           </div>
 
@@ -214,7 +252,7 @@ export function Login() {
 
             <div>
               <label htmlFor="reset-email" className="sr-only">
-                Email address
+                {t.login.emailLabel}
               </label>
               <input
                 id="reset-email"
@@ -223,7 +261,7 @@ export function Login() {
                 autoComplete="email"
                 required
                 className="appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                placeholder="Email address"
+                placeholder={t.login.emailPlaceholder}
                 value={email}
                 onChange={(e) => { clearError(); setEmail(e.target.value); }}
               />
@@ -235,14 +273,14 @@ export function Login() {
                 disabled={isSubmitting || !email}
                 className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting ? 'Sending...' : 'Send Reset Code'}
+                {isSubmitting ? t.login.sending : t.login.sendResetCode}
               </button>
               <button
                 type="button"
                 onClick={goBackToLogin}
                 className="text-sm text-indigo-600 hover:text-indigo-500"
               >
-                Back to sign in
+                {t.login.backToSignIn}
               </button>
             </div>
           </form>
@@ -258,10 +296,10 @@ export function Login() {
         <div className="max-w-md w-full space-y-8">
           <div>
             <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-              Enter New Password
+              {t.login.enterNewPassword}
             </h2>
             <p className="mt-2 text-center text-sm text-gray-600">
-              Check your email for the verification code
+              {t.login.checkEmailForCode}
             </p>
           </div>
 
@@ -281,7 +319,7 @@ export function Login() {
             <div className="space-y-4">
               <div>
                 <label htmlFor="reset-code" className="block text-sm font-medium text-gray-700">
-                  Verification Code
+                  {t.login.verificationCode}
                 </label>
                 <input
                   id="reset-code"
@@ -289,7 +327,7 @@ export function Login() {
                   type="text"
                   required
                   className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                  placeholder="Enter code from email"
+                  placeholder={t.login.enterCodeFromEmail}
                   value={resetCode}
                   onChange={(e) => { clearError(); setResetCode(e.target.value); }}
                 />
@@ -298,7 +336,7 @@ export function Login() {
               <div className="rounded-md shadow-sm -space-y-px">
                 <div>
                   <label htmlFor="new-password-reset" className="sr-only">
-                    New Password
+                    {t.login.newPassword}
                   </label>
                   <input
                     id="new-password-reset"
@@ -306,7 +344,7 @@ export function Login() {
                     type="password"
                     required
                     className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                    placeholder="New Password"
+                    placeholder={t.login.newPassword}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     minLength={12}
@@ -314,7 +352,7 @@ export function Login() {
                 </div>
                 <div>
                   <label htmlFor="confirm-password-reset" className="sr-only">
-                    Confirm Password
+                    {t.login.confirmPassword}
                   </label>
                   <input
                     id="confirm-password-reset"
@@ -322,7 +360,7 @@ export function Login() {
                     type="password"
                     required
                     className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                    placeholder="Confirm Password"
+                    placeholder={t.login.confirmPassword}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     minLength={12}
@@ -331,11 +369,11 @@ export function Login() {
               </div>
 
               {newPassword && confirmPassword && newPassword !== confirmPassword && (
-                <p className="text-sm text-red-600">Passwords do not match</p>
+                <p className="text-sm text-red-600">{t.login.passwordsDoNotMatch}</p>
               )}
 
               <p className="text-xs text-gray-500">
-                Password must be at least 12 characters with uppercase, lowercase, numbers, and symbols.
+                {t.login.passwordRequirements}
               </p>
             </div>
 
@@ -345,14 +383,14 @@ export function Login() {
                 disabled={isSubmitting || newPassword !== confirmPassword || !resetCode}
                 className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {isSubmitting ? 'Resetting...' : 'Reset Password'}
+                {isSubmitting ? t.login.resetting : t.login.resetPassword}
               </button>
               <button
                 type="button"
                 onClick={goBackToLogin}
                 className="text-sm text-indigo-600 hover:text-indigo-500"
               >
-                Back to sign in
+                {t.login.backToSignIn}
               </button>
             </div>
           </form>
@@ -367,10 +405,10 @@ export function Login() {
       <div className="max-w-md w-full space-y-8">
         <div>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            Emosaic Admin
+            {t.login.title}
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600">
-            Sign in to manage your mosaics
+            {t.login.subtitle}
           </p>
         </div>
 
@@ -390,7 +428,7 @@ export function Login() {
           <div className="rounded-md shadow-sm -space-y-px">
             <div>
               <label htmlFor="email" className="sr-only">
-                Email address
+                {t.login.emailLabel}
               </label>
               <input
                 id="email"
@@ -399,14 +437,14 @@ export function Login() {
                 autoComplete="email"
                 required
                 className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                placeholder="Email address"
+                placeholder={t.login.emailPlaceholder}
                 value={email}
                 onChange={(e) => { clearError(); setSuccessMessage(null); setEmail(e.target.value); }}
               />
             </div>
             <div>
               <label htmlFor="password" className="sr-only">
-                Password
+                {t.login.passwordLabel}
               </label>
               <input
                 id="password"
@@ -415,7 +453,7 @@ export function Login() {
                 autoComplete="current-password"
                 required
                 className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
-                placeholder="Password"
+                placeholder={t.login.passwordPlaceholder}
                 value={password}
                 onChange={(e) => { clearError(); setSuccessMessage(null); setPassword(e.target.value); }}
               />
@@ -428,7 +466,7 @@ export function Login() {
               onClick={() => { clearError(); setSuccessMessage(null); setMode('forgotPassword'); }}
               className="text-sm text-indigo-600 hover:text-indigo-500"
             >
-              Forgot your password?
+              {t.login.forgotPassword}
             </button>
           </div>
 
@@ -438,7 +476,7 @@ export function Login() {
               disabled={isSubmitting}
               className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isSubmitting ? 'Signing in...' : 'Sign in'}
+              {isSubmitting ? t.login.signingIn : t.login.signIn}
             </button>
           </div>
         </form>

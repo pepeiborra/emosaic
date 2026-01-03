@@ -177,6 +177,51 @@ Resources:
           Value: !Ref Environment
 
   #############################################################################
+  # Cognito Custom Message Lambda Trigger
+  #############################################################################
+
+  CustomMessageLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-custom-message-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  CustomMessageFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-cognito-custom-message'
+      Runtime: python3.11
+      Handler: custom_message.lambda_handler
+      Role: !GetAtt CustomMessageLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - will be replaced by actual deployment
+          def lambda_handler(event, context):
+              return event
+      Timeout: 10
+      Tags:
+        - Key: Project
+          Value: Emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
+  CustomMessageLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CustomMessageFunction
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*'
+
+  #############################################################################
   # Cognito User Pool for Admin Authentication
   #############################################################################
 
@@ -189,10 +234,13 @@ Resources:
       AutoVerifiedAttributes:
         - email
       MfaConfiguration: 'OFF'
+      LambdaConfig:
+        CustomMessage: !GetAtt CustomMessageFunction.Arn
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true
+        # Note: InviteMessageTemplate is overridden by CustomMessage Lambda trigger
         InviteMessageTemplate:
-          EmailMessage: 'Has sido invitado/a al Panel de Administración de Casa del Manco. Tu nombre de usuario es {username} y tu contraseña temporal es: {####}. Por favor, inicia sesión en https://casadelmanco.com/admin y cambia tu contraseña.'
+          EmailMessage: 'Usuario: {username} - Contraseña temporal: {####}'
           EmailSubject: 'Invitación al Panel de Administración - Casa del Manco'
       EmailConfiguration:
         EmailSendingAccount: COGNITO_DEFAULT
@@ -405,3 +453,15 @@ Outputs:
     Value: !GetAtt MosaicLambdaRole.Arn
     Export:
       Name: !Sub '${Environment}-mosaic-lambda-role-arn'
+
+  CustomMessageFunctionName:
+    Description: Name of the Custom Message Lambda function
+    Value: !Ref CustomMessageFunction
+    Export:
+      Name: !Sub '${Environment}-custom-message-function'
+
+  CustomMessageFunctionArn:
+    Description: ARN of the Custom Message Lambda function
+    Value: !GetAtt CustomMessageFunction.Arn
+    Export:
+      Name: !Sub '${Environment}-custom-message-function-arn'

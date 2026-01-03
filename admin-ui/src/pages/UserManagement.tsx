@@ -8,6 +8,7 @@ import {
   enableUser,
   disableUser,
 } from '../services/api';
+import { useTranslation } from '../i18n';
 import type { User } from '../types/api';
 
 function UserIcon({ className }: { className?: string }) {
@@ -42,7 +43,7 @@ function EnvelopeIcon({ className }: { className?: string }) {
   );
 }
 
-function getStatusBadgeClass(status: User['status'], enabled: boolean): string {
+function useStatusBadgeClass(status: User['status'], enabled: boolean): string {
   if (!enabled) {
     return 'bg-gray-100 text-gray-800';
   }
@@ -62,23 +63,24 @@ function getStatusBadgeClass(status: User['status'], enabled: boolean): string {
   }
 }
 
-function getStatusLabel(status: User['status'], enabled: boolean): string {
+function useStatusLabel(status: User['status'], enabled: boolean): string {
+  const t = useTranslation();
   if (!enabled) {
-    return 'Disabled';
+    return t.userManagement.statusLabels.disabled;
   }
   switch (status) {
     case 'CONFIRMED':
-      return 'Active';
+      return t.userManagement.statusLabels.active;
     case 'UNCONFIRMED':
-      return 'Pending';
+      return t.userManagement.statusLabels.pending;
     case 'FORCE_CHANGE_PASSWORD':
-      return 'Password Reset';
+      return t.userManagement.statusLabels.passwordReset;
     case 'RESET_REQUIRED':
-      return 'Reset Required';
+      return t.userManagement.statusLabels.resetRequired;
     case 'ARCHIVED':
-      return 'Archived';
+      return t.userManagement.statusLabels.archived;
     case 'COMPROMISED':
-      return 'Compromised';
+      return t.userManagement.statusLabels.compromised;
     default:
       return status;
   }
@@ -86,6 +88,7 @@ function getStatusLabel(status: User['status'], enabled: boolean): string {
 
 export function UserManagement() {
   const queryClient = useQueryClient();
+  const t = useTranslation();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
@@ -101,12 +104,12 @@ export function UserManagement() {
     mutationFn: (email: string) => createUser(email),
     onSuccess: (result) => {
       if (result.success) {
-        setActionSuccess(result.message || 'User created successfully');
+        setActionSuccess(result.message || t.userManagement.userCreatedSuccess);
         setShowCreateModal(false);
         setNewUserEmail('');
         queryClient.invalidateQueries({ queryKey: ['users'] });
       } else {
-        setActionError(result.error || 'Failed to create user');
+        setActionError(result.error || t.userManagement.failedToCreateUser);
       }
     },
     onError: (err: Error) => {
@@ -118,11 +121,11 @@ export function UserManagement() {
     mutationFn: deleteUser,
     onSuccess: (result) => {
       if (result.success) {
-        setActionSuccess(result.message || 'User deleted successfully');
+        setActionSuccess(result.message || t.userManagement.userDeletedSuccess);
         setConfirmDelete(null);
         queryClient.invalidateQueries({ queryKey: ['users'] });
       } else {
-        setActionError(result.error || 'Failed to delete user');
+        setActionError(result.error || t.userManagement.failedToDeleteUser);
       }
     },
     onError: (err: Error) => {
@@ -134,9 +137,9 @@ export function UserManagement() {
     mutationFn: resendUserInvite,
     onSuccess: (result) => {
       if (result.success) {
-        setActionSuccess(result.message || 'Invitation resent successfully');
+        setActionSuccess(result.message || t.userManagement.invitationResent);
       } else {
-        setActionError(result.error || 'Failed to resend invitation');
+        setActionError(result.error || t.userManagement.failedToResendInvite);
       }
     },
     onError: (err: Error) => {
@@ -148,10 +151,10 @@ export function UserManagement() {
     mutationFn: enableUser,
     onSuccess: (result) => {
       if (result.success) {
-        setActionSuccess(result.message || 'User enabled successfully');
+        setActionSuccess(result.message || t.userManagement.userEnabled);
         queryClient.invalidateQueries({ queryKey: ['users'] });
       } else {
-        setActionError(result.error || 'Failed to enable user');
+        setActionError(result.error || t.userManagement.failedToEnableUser);
       }
     },
     onError: (err: Error) => {
@@ -163,10 +166,10 @@ export function UserManagement() {
     mutationFn: disableUser,
     onSuccess: (result) => {
       if (result.success) {
-        setActionSuccess(result.message || 'User disabled successfully');
+        setActionSuccess(result.message || t.userManagement.userDisabled);
         queryClient.invalidateQueries({ queryKey: ['users'] });
       } else {
-        setActionError(result.error || 'Failed to disable user');
+        setActionError(result.error || t.userManagement.failedToDisableUser);
       }
     },
     onError: (err: Error) => {
@@ -199,7 +202,7 @@ export function UserManagement() {
   if (error) {
     return (
       <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-        <p className="text-red-800">Error loading users: {(error as Error).message}</p>
+        <p className="text-red-800">{t.userManagement.errorLoadingUsers}: {(error as Error).message}</p>
       </div>
     );
   }
@@ -211,9 +214,9 @@ export function UserManagement() {
       {/* Header */}
       <div className="sm:flex sm:items-center sm:justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t.userManagement.title}</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Manage admin users who can access the mosaic dashboard
+            {t.userManagement.subtitle}
           </p>
         </div>
         <button
@@ -224,7 +227,7 @@ export function UserManagement() {
           className="mt-4 sm:mt-0 inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
         >
           <PlusIcon className="h-5 w-5 mr-2" />
-          Add User
+          {t.userManagement.addUser}
         </button>
       </div>
 
@@ -252,96 +255,34 @@ export function UserManagement() {
         {users.length === 0 ? (
           <div className="p-6 text-center text-gray-500">
             <UserIcon className="mx-auto h-12 w-12 text-gray-400" />
-            <p className="mt-2">No users found</p>
+            <p className="mt-2">{t.userManagement.noUsersFound}</p>
           </div>
         ) : (
           <ul className="divide-y divide-gray-200">
             {users.map((user) => (
-              <li key={user.username} className="p-4 sm:p-6">
-                <div className="flex items-center justify-between flex-wrap gap-4">
-                  <div className="flex items-center min-w-0 flex-1">
-                    <div className="flex-shrink-0">
-                      <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center">
-                        <UserIcon className="h-6 w-6 text-indigo-600" />
-                      </div>
-                    </div>
-                    <div className="ml-4 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">
-                        {user.email || user.username}
-                      </p>
-                      <p className="text-sm text-gray-500">
-                        Created: {user.created ? new Date(user.created).toLocaleDateString() : 'N/A'}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClass(
-                        user.status,
-                        user.enabled
-                      )}`}
-                    >
-                      {getStatusLabel(user.status, user.enabled)}
-                    </span>
-
-                    {/* Action buttons */}
-                    <div className="flex items-center gap-2">
-                      {/* Resend invite (only for unconfirmed users) */}
-                      {(user.status === 'UNCONFIRMED' || user.status === 'FORCE_CHANGE_PASSWORD') && (
-                        <button
-                          onClick={() => {
-                            clearMessages();
-                            resendInviteMutation.mutate(user.username);
-                          }}
-                          disabled={resendInviteMutation.isPending}
-                          className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
-                          title="Resend invitation email"
-                        >
-                          <EnvelopeIcon className="h-5 w-5" />
-                        </button>
-                      )}
-
-                      {/* Enable/Disable toggle */}
-                      {user.enabled ? (
-                        <button
-                          onClick={() => {
-                            clearMessages();
-                            disableMutation.mutate(user.username);
-                          }}
-                          disabled={disableMutation.isPending}
-                          className="px-3 py-1 text-xs font-medium text-orange-700 bg-orange-100 hover:bg-orange-200 rounded-md transition-colors"
-                        >
-                          Disable
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            clearMessages();
-                            enableMutation.mutate(user.username);
-                          }}
-                          disabled={enableMutation.isPending}
-                          className="px-3 py-1 text-xs font-medium text-green-700 bg-green-100 hover:bg-green-200 rounded-md transition-colors"
-                        >
-                          Enable
-                        </button>
-                      )}
-
-                      {/* Delete button */}
-                      <button
-                        onClick={() => {
-                          clearMessages();
-                          setConfirmDelete(user.username);
-                        }}
-                        className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
-                        title="Delete user"
-                      >
-                        <TrashIcon className="h-5 w-5" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </li>
+              <UserRow
+                key={user.username}
+                user={user}
+                onResendInvite={() => {
+                  clearMessages();
+                  resendInviteMutation.mutate(user.email || user.username);
+                }}
+                onEnable={() => {
+                  clearMessages();
+                  enableMutation.mutate(user.email || user.username);
+                }}
+                onDisable={() => {
+                  clearMessages();
+                  disableMutation.mutate(user.email || user.username);
+                }}
+                onDelete={() => {
+                  clearMessages();
+                  setConfirmDelete(user.email || user.username);
+                }}
+                isResending={resendInviteMutation.isPending}
+                isEnabling={enableMutation.isPending}
+                isDisabling={disableMutation.isPending}
+              />
             ))}
           </ul>
         )}
@@ -363,16 +304,16 @@ export function UserManagement() {
                     <UserIcon className="h-6 w-6 text-indigo-600" />
                   </div>
                   <div className="mt-3 text-center sm:mt-5">
-                    <h3 className="text-lg leading-6 font-medium text-gray-900">Add New User</h3>
+                    <h3 className="text-lg leading-6 font-medium text-gray-900">{t.userManagement.addNewUser}</h3>
                     <p className="mt-2 text-sm text-gray-500">
-                      Enter the email address for the new admin user. They will receive an invitation email with a temporary password.
+                      {t.userManagement.newUserInstructions}
                     </p>
                   </div>
                 </div>
 
                 <div className="mt-5">
                   <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                    Email address
+                    {t.userManagement.emailAddressLabel}
                   </label>
                   <input
                     type="email"
@@ -381,7 +322,7 @@ export function UserManagement() {
                     onChange={(e) => setNewUserEmail(e.target.value)}
                     required
                     className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                    placeholder="admin@example.com"
+                    placeholder={t.userManagement.emailPlaceholder}
                   />
                 </div>
 
@@ -391,7 +332,7 @@ export function UserManagement() {
                     disabled={createMutation.isPending || !newUserEmail.trim()}
                     className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:w-auto sm:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {createMutation.isPending ? 'Creating...' : 'Create User'}
+                    {createMutation.isPending ? t.userManagement.creatingUser : t.userManagement.createUser}
                   </button>
                   <button
                     type="button"
@@ -401,7 +342,7 @@ export function UserManagement() {
                     }}
                     className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm"
                   >
-                    Cancel
+                    {t.common.cancel}
                   </button>
                 </div>
               </form>
@@ -425,9 +366,9 @@ export function UserManagement() {
                   <TrashIcon className="h-6 w-6 text-red-600" />
                 </div>
                 <div className="mt-3 text-center sm:mt-5">
-                  <h3 className="text-lg leading-6 font-medium text-gray-900">Delete User</h3>
+                  <h3 className="text-lg leading-6 font-medium text-gray-900">{t.userManagement.deleteUser}</h3>
                   <p className="mt-2 text-sm text-gray-500">
-                    Are you sure you want to delete <span className="font-medium">{confirmDelete}</span>? This action cannot be undone.
+                    {t.userManagement.deleteUserConfirmation} <span className="font-medium">{confirmDelete}</span>? {t.userManagement.cannotBeUndone}
                   </p>
                 </div>
               </div>
@@ -441,14 +382,14 @@ export function UserManagement() {
                   disabled={deleteMutation.isPending}
                   className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:w-auto sm:text-sm disabled:opacity-50"
                 >
-                  {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+                  {deleteMutation.isPending ? t.common.deleting : t.common.delete}
                 </button>
                 <button
                   type="button"
                   onClick={() => setConfirmDelete(null)}
                   className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:w-auto sm:text-sm"
                 >
-                  Cancel
+                  {t.common.cancel}
                 </button>
               </div>
             </div>
@@ -456,5 +397,102 @@ export function UserManagement() {
         </div>
       )}
     </div>
+  );
+}
+
+function UserRow({
+  user,
+  onResendInvite,
+  onEnable,
+  onDisable,
+  onDelete,
+  isResending,
+  isEnabling,
+  isDisabling,
+}: {
+  user: User;
+  onResendInvite: () => void;
+  onEnable: () => void;
+  onDisable: () => void;
+  onDelete: () => void;
+  isResending: boolean;
+  isEnabling: boolean;
+  isDisabling: boolean;
+}) {
+  const t = useTranslation();
+  const badgeClass = useStatusBadgeClass(user.status, user.enabled);
+  const statusLabel = useStatusLabel(user.status, user.enabled);
+
+  return (
+    <li className="p-4 sm:p-6">
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center min-w-0 flex-1">
+          <div className="flex-shrink-0">
+            <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center">
+              <UserIcon className="h-6 w-6 text-indigo-600" />
+            </div>
+          </div>
+          <div className="ml-4 min-w-0">
+            <p className="text-sm font-medium text-gray-900 truncate">
+              {user.email || user.username}
+            </p>
+            <p className="text-sm text-gray-500">
+              {t.userManagement.createdLabel}: {user.created ? new Date(user.created).toLocaleDateString() : 'N/A'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <span
+            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${badgeClass}`}
+          >
+            {statusLabel}
+          </span>
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-2">
+            {/* Resend invite (only for unconfirmed users) */}
+            {(user.status === 'UNCONFIRMED' || user.status === 'FORCE_CHANGE_PASSWORD') && (
+              <button
+                onClick={onResendInvite}
+                disabled={isResending}
+                className="p-2 text-gray-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
+                title={t.userManagement.resendInvite}
+              >
+                <EnvelopeIcon className="h-5 w-5" />
+              </button>
+            )}
+
+            {/* Enable/Disable toggle */}
+            {user.enabled ? (
+              <button
+                onClick={onDisable}
+                disabled={isDisabling}
+                className="px-3 py-1 text-xs font-medium text-orange-700 bg-orange-100 hover:bg-orange-200 rounded-md transition-colors"
+              >
+                {t.common.disable}
+              </button>
+            ) : (
+              <button
+                onClick={onEnable}
+                disabled={isEnabling}
+                className="px-3 py-1 text-xs font-medium text-green-700 bg-green-100 hover:bg-green-200 rounded-md transition-colors"
+              >
+                {t.common.enable}
+              </button>
+            )}
+
+            {/* Delete button */}
+            <button
+              onClick={onDelete}
+              className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+              title={t.common.delete}
+            >
+              <TrashIcon className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </li>
   );
 }

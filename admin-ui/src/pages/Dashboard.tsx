@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { listMosaics } from '../services/api';
+import { useTranslation } from '../i18n';
 import type { Mosaic } from '../types/api';
 
 function StatusBadge({ status }: { status: Mosaic['status'] }) {
+  const t = useTranslation();
   const styles = {
     pending: 'bg-yellow-100 text-yellow-800',
     processing: 'bg-blue-100 text-blue-800',
@@ -13,12 +15,13 @@ function StatusBadge({ status }: { status: Mosaic['status'] }) {
 
   return (
     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${styles[status]}`}>
-      {status}
+      {t.status[status]}
     </span>
   );
 }
 
 function MosaicCard({ mosaic }: { mosaic: Mosaic }) {
+  const t = useTranslation();
   // Priority: thumbnail > full mosaic > source image
   const previewUrl = mosaic.thumbnail_path
     ? `/${mosaic.thumbnail_path}`
@@ -55,7 +58,7 @@ function MosaicCard({ mosaic }: { mosaic: Mosaic }) {
           </h3>
           {mosaic.is_main && (
             <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-800">
-              Main
+              {t.common.main}
             </span>
           )}
         </div>
@@ -83,6 +86,7 @@ function MosaicSkeleton() {
 }
 
 export function Dashboard() {
+  const t = useTranslation();
   const { data, isLoading, error } = useQuery({
     queryKey: ['mosaics'],
     queryFn: () => listMosaics(50),
@@ -93,23 +97,23 @@ export function Dashboard() {
     <div>
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Mosaics</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t.dashboard.title}</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Manage your photo mosaics
+            {t.dashboard.subtitle}
           </p>
         </div>
         <Link
           to="/create"
           className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
         >
-          Create New
+          {t.dashboard.createNew}
         </Link>
       </div>
 
       {error && (
         <div className="rounded-md bg-red-50 p-4 mb-6">
           <p className="text-sm text-red-700">
-            Failed to load mosaics: {error instanceof Error ? error.message : 'Unknown error'}
+            {t.dashboard.failedToLoad}: {error instanceof Error ? error.message : t.dashboard.unknownError}
           </p>
         </div>
       )}
@@ -135,16 +139,16 @@ export function Dashboard() {
               d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
             />
           </svg>
-          <h3 className="mt-2 text-sm font-medium text-gray-900">No mosaics</h3>
+          <h3 className="mt-2 text-sm font-medium text-gray-900">{t.dashboard.noMosaics}</h3>
           <p className="mt-1 text-sm text-gray-500">
-            Get started by creating a new mosaic.
+            {t.dashboard.getStarted}
           </p>
           <div className="mt-6">
             <Link
               to="/create"
               className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700"
             >
-              Create Mosaic
+              {t.dashboard.createMosaic}
             </Link>
           </div>
         </div>

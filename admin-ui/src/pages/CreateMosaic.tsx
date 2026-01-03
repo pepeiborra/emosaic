@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { createMosaic, getUploadUrl, uploadFileToS3, submitJob, getTileCount, listTileFolders } from '../services/api';
+import { useTranslation } from '../i18n';
 import type { MosaicConfig, TileFolder } from '../types/api';
 
 /**
@@ -375,6 +376,7 @@ function FolderTreeNode({
 
 export function CreateMosaic() {
   const navigate = useNavigate();
+  const t = useTranslation();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [imageDimensions, setImageDimensions] = useState<ImageDimensions | null>(null);
@@ -481,15 +483,15 @@ export function CreateMosaic() {
       if (!file) throw new Error('No file selected');
 
       // Step 1: Get presigned URL
-      setUploadProgress('Getting upload URL...');
+      setUploadProgress(t.createMosaic.gettingUploadUrl);
       const { upload_url, s3_key } = await getUploadUrl(file.type, file.name);
 
       // Step 2: Upload file to S3
-      setUploadProgress('Uploading image...');
+      setUploadProgress(t.createMosaic.uploadingImage);
       await uploadFileToS3(file, upload_url);
 
       // Step 3: Create mosaic record
-      setUploadProgress('Creating mosaic...');
+      setUploadProgress(t.createMosaic.creatingMosaic);
       const mosaic = await createMosaic({
         title: title || undefined,
         source_image_path: s3_key,
@@ -498,7 +500,7 @@ export function CreateMosaic() {
       });
 
       // Step 4: Submit job
-      setUploadProgress('Starting generation job...');
+      setUploadProgress(t.createMosaic.startingJob);
       const job = await submitJob(mosaic.id);
 
       return { mosaic, job };
@@ -588,9 +590,9 @@ export function CreateMosaic() {
   return (
     <div className="max-w-2xl mx-auto">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Create Mosaic</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{t.createMosaic.title}</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Upload a source image and configure mosaic generation settings.
+          {t.createMosaic.subtitle}
         </p>
       </div>
 
@@ -598,7 +600,7 @@ export function CreateMosaic() {
         {/* File Upload */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            Source Image
+            {t.createMosaic.sourceImage}
           </label>
           <div
             onDrop={handleDrop}
@@ -626,7 +628,7 @@ export function CreateMosaic() {
                   }}
                   className="text-sm text-red-600 hover:text-red-700"
                 >
-                  Remove
+                  {t.common.remove}
                 </button>
               </div>
             ) : (
@@ -645,9 +647,9 @@ export function CreateMosaic() {
                   />
                 </svg>
                 <p className="text-sm text-gray-600">
-                  Click or drag and drop to upload
+                  {t.createMosaic.clickOrDrag}
                 </p>
-                <p className="text-xs text-gray-500">PNG, JPG up to 20MB</p>
+                <p className="text-xs text-gray-500">{t.createMosaic.fileLimit}</p>
               </div>
             )}
           </div>
@@ -663,7 +665,7 @@ export function CreateMosaic() {
         {/* Title */}
         <div>
           <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-2">
-            Title (optional)
+            {t.createMosaic.titleLabel}
           </label>
           <input
             type="text"
@@ -671,14 +673,14 @@ export function CreateMosaic() {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2 border"
-            placeholder="My Mosaic"
+            placeholder={t.createMosaic.titlePlaceholder}
           />
         </div>
 
         {/* Tile Size */}
         <div>
           <label htmlFor="tile-size" className="block text-sm font-medium text-gray-700 mb-2">
-            Tile Size
+            {t.createMosaic.tileSize}
           </label>
           <select
             id="tile-size"
@@ -693,9 +695,9 @@ export function CreateMosaic() {
             ))}
           </select>
           <p className="mt-1 text-xs text-gray-500">
-            Smaller tiles = more detail but larger output
+            {t.createMosaic.tileSizeHelp}
             {config.mode > 1 && (
-              <span className="text-gray-400"> (must be divisible by {getModeDim(config.mode)} for mode {config.mode})</span>
+              <span className="text-gray-400"> ({t.createMosaic.tileSizeDivisible.replace('{dim}', String(getModeDim(config.mode))).replace('{mode}', String(config.mode))})</span>
             )}
           </p>
         </div>
@@ -703,7 +705,7 @@ export function CreateMosaic() {
         {/* Downsample */}
         <div>
           <label htmlFor="downsample" className="block text-sm font-medium text-gray-700 mb-2">
-            Downsample Factor
+            {t.createMosaic.downsample}
           </label>
           <select
             id="downsample"
@@ -713,19 +715,19 @@ export function CreateMosaic() {
           >
             {DOWNSAMPLE_OPTIONS.map((factor) => (
               <option key={factor} value={factor}>
-                {factor === 1 ? '1× (no downsampling)' : `${factor}× (1/${factor} resolution)`}
+                {factor === 1 ? `1x (${t.createMosaic.noDownsampling})` : `${factor}x (${t.createMosaic.resolution.replace('{factor}', String(factor))})`}
               </option>
             ))}
           </select>
           <p className="mt-1 text-xs text-gray-500">
-            Higher values reduce output size and processing time
+            {t.createMosaic.downsampleHelp}
           </p>
         </div>
 
         {/* Mode */}
         <div>
           <label htmlFor="mode" className="block text-sm font-medium text-gray-700 mb-2">
-            Matching Mode
+            {t.createMosaic.matchingMode}
           </label>
           <select
             id="mode"
@@ -740,14 +742,14 @@ export function CreateMosaic() {
             ))}
           </select>
           <p className="mt-1 text-xs text-gray-500">
-            Higher values analyze more segments per tile for better matching
+            {t.createMosaic.modeHelp}
           </p>
         </div>
 
         {/* Tint Opacity */}
         <div>
           <label htmlFor="opacity" className="block text-sm font-medium text-gray-700 mb-2">
-            Tint Opacity: {config.tint_opacity.toFixed(2)}
+            {t.createMosaic.tintOpacity}: {config.tint_opacity.toFixed(2)}
           </label>
           <input
             type="range"
@@ -760,7 +762,7 @@ export function CreateMosaic() {
             className="block w-full"
           />
           <p className="mt-1 text-xs text-gray-500">
-            Higher values blend the source image more visibly
+            {t.createMosaic.tintHelp}
           </p>
         </div>
 
@@ -775,7 +777,7 @@ export function CreateMosaic() {
               className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
             />
             <label htmlFor="no-repeat" className="ml-2 block text-sm text-gray-700">
-              No repeat tiles (uses Hungarian algorithm)
+              {t.createMosaic.noRepeat}
             </label>
           </div>
           <div className="flex items-center">
@@ -787,7 +789,7 @@ export function CreateMosaic() {
               className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
             />
             <label htmlFor="crop" className="ml-2 block text-sm text-gray-700">
-              Crop tiles to square (instead of resize)
+              {t.createMosaic.cropTiles}
             </label>
           </div>
         </div>
@@ -795,17 +797,17 @@ export function CreateMosaic() {
         {/* Tile Folders */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            Tile Folders
+            {t.createMosaic.tileFolders}
             {tileFoldersData && (
               <span className="ml-2 text-gray-400 font-normal">
-                ({includedFolderCount} of {tileFoldersData.count} included)
+                ({includedFolderCount} {t.createMosaic.includedOf} {tileFoldersData.count} {t.createMosaic.included})
               </span>
             )}
           </label>
           {foldersLoading ? (
             <div className="flex items-center justify-center py-4">
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-indigo-600"></div>
-              <span className="ml-2 text-sm text-gray-500">Loading folders...</span>
+              <span className="ml-2 text-sm text-gray-500">{t.createMosaic.loadingFolders}</span>
             </div>
           ) : tileFoldersData && tileFoldersData.folders.length > 0 ? (
             <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -825,10 +827,10 @@ export function CreateMosaic() {
               </div>
             </div>
           ) : (
-            <p className="text-sm text-gray-500">No folders found in tiles directory</p>
+            <p className="text-sm text-gray-500">{t.createMosaic.noFolders}</p>
           )}
           <p className="mt-1 text-xs text-gray-500">
-            Uncheck folders to exclude them from mosaic generation
+            {t.createMosaic.uncheckFolders}
           </p>
         </div>
 
@@ -836,52 +838,52 @@ export function CreateMosaic() {
         {mosaicStats && imageDimensions && (
           <div className="rounded-lg bg-gray-50 border border-gray-200 p-4">
             <h3 className="text-sm font-medium text-gray-900 mb-3">
-              Mosaic Preview
+              {t.createMosaic.mosaicPreview}
             </h3>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <p className="text-gray-500">Source Image</p>
+                <p className="text-gray-500">{t.createMosaic.sourceImageLabel}</p>
                 <p className="font-medium text-gray-900">
-                  {formatNumber(imageDimensions.width)} × {formatNumber(imageDimensions.height)} px
+                  {formatNumber(imageDimensions.width)} x {formatNumber(imageDimensions.height)} px
                 </p>
                 {file && (
                   <p className="text-xs text-gray-400">{formatFileSize(file.size)}</p>
                 )}
               </div>
               <div>
-                <p className="text-gray-500">Output Size</p>
+                <p className="text-gray-500">{t.createMosaic.outputSize}</p>
                 <p className="font-medium text-gray-900">
-                  {formatNumber(mosaicStats.outputWidth)} × {formatNumber(mosaicStats.outputHeight)} px
+                  {formatNumber(mosaicStats.outputWidth)} x {formatNumber(mosaicStats.outputHeight)} px
                 </p>
               </div>
               <div>
-                <p className="text-gray-500">Tiles per Row</p>
+                <p className="text-gray-500">{t.createMosaic.tilesPerRow}</p>
                 <p className="font-medium text-gray-900">
                   {formatNumber(mosaicStats.columns)}
                 </p>
               </div>
               <div>
-                <p className="text-gray-500">Tiles per Column</p>
+                <p className="text-gray-500">{t.createMosaic.tilesPerColumn}</p>
                 <p className="font-medium text-gray-900">
                   {formatNumber(mosaicStats.rows)}
                 </p>
               </div>
               <div className="col-span-2 pt-2 border-t border-gray-200">
-                <p className="text-gray-500">Total Tiles</p>
+                <p className="text-gray-500">{t.createMosaic.totalTiles}</p>
                 <p className="font-medium text-gray-900">
                   {formatNumber(mosaicStats.totalTiles)}
                   <span className="text-xs text-gray-400 ml-2">
-                    ({formatNumber(mosaicStats.columns)} × {formatNumber(mosaicStats.rows)})
+                    ({formatNumber(mosaicStats.columns)} x {formatNumber(mosaicStats.rows)})
                   </span>
                 </p>
               </div>
               {tileCountData && config.no_repeat && (
                 <div className="col-span-2 pt-2 border-t border-gray-200">
-                  <p className="text-gray-500">Available Tiles</p>
+                  <p className="text-gray-500">{t.createMosaic.availableTiles}</p>
                   <p className="font-medium text-gray-900">
                     {formatNumber(tileCountData.count)}
                     {tileCountFetching && (
-                      <span className="ml-2 text-xs text-gray-400">(updating...)</span>
+                      <span className="ml-2 text-xs text-gray-400">({t.createMosaic.updating})</span>
                     )}
                   </p>
                 </div>
@@ -900,7 +902,7 @@ export function CreateMosaic() {
                 </svg>
               </div>
               <div className="ml-3">
-                <h3 className="text-sm font-medium text-yellow-800">Invalid tile size for selected mode</h3>
+                <h3 className="text-sm font-medium text-yellow-800">{t.createMosaic.invalidTileSize}</h3>
                 <p className="mt-1 text-sm text-yellow-700">{tileSizeValidation.message}</p>
               </div>
             </div>
@@ -917,7 +919,7 @@ export function CreateMosaic() {
                 </svg>
               </div>
               <div className="ml-3">
-                <h3 className="text-sm font-medium text-yellow-800">Insufficient tiles for no-repeat mode</h3>
+                <h3 className="text-sm font-medium text-yellow-800">{t.createMosaic.insufficientTiles}</h3>
                 <p className="mt-1 text-sm text-yellow-700">{noRepeatValidation.message}</p>
               </div>
             </div>
@@ -930,7 +932,7 @@ export function CreateMosaic() {
             <p className="text-sm text-red-700">
               {createMutation.error instanceof Error
                 ? createMutation.error.message
-                : 'Failed to create mosaic'}
+                : t.createMosaic.failedToCreate}
             </p>
           </div>
         )}
@@ -952,14 +954,14 @@ export function CreateMosaic() {
             onClick={() => navigate('/')}
             className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
           >
-            Cancel
+            {t.common.cancel}
           </button>
           <button
             type="submit"
             disabled={!file || createMutation.isPending || !noRepeatValidation.isValid || !tileSizeValidation.isValid}
             className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {createMutation.isPending ? 'Creating...' : 'Create Mosaic'}
+            {createMutation.isPending ? t.createMosaic.creating : t.createMosaic.title}
           </button>
         </div>
       </form>

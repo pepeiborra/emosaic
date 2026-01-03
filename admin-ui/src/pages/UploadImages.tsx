@@ -2,6 +2,7 @@ import { useState, useCallback, useRef } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useAuth } from '../hooks/useAuth';
 import { uploadImages } from '../services/api';
+import { useTranslation } from '../i18n';
 
 interface FileWithPreview {
   file: File;
@@ -61,6 +62,7 @@ function TrashIcon({ className }: { className?: string }) {
 
 export function UploadImages() {
   const { user } = useAuth();
+  const t = useTranslation();
   const [files, setFiles] = useState<FileWithPreview[]>([]);
   const [year, setYear] = useState<string>(new Date().getFullYear().toString());
   const [isDragActive, setIsDragActive] = useState(false);
@@ -191,41 +193,41 @@ export function UploadImages() {
         return (
           <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
             <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-800 mr-1" />
-            Uploading
+            {t.uploadImages.statusUploading}
           </span>
         );
       case 'success':
         return (
           <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
             <CheckCircleIcon className="h-3 w-3 mr-1" />
-            Uploaded
+            {t.uploadImages.statusUploaded}
           </span>
         );
       case 'duplicate':
         return (
           <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
             <ExclamationCircleIcon className="h-3 w-3 mr-1" />
-            Duplicate
+            {t.uploadImages.statusDuplicate}
           </span>
         );
       case 'invalid':
         return (
           <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
             <XCircleIcon className="h-3 w-3 mr-1" />
-            Invalid
+            {t.uploadImages.statusInvalid}
           </span>
         );
       case 'error':
         return (
           <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
             <XCircleIcon className="h-3 w-3 mr-1" />
-            Error
+            {t.uploadImages.statusError}
           </span>
         );
       default:
         return (
           <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-            Pending
+            {t.uploadImages.statusPending}
           </span>
         );
     }
@@ -240,9 +242,9 @@ export function UploadImages() {
       {/* Header */}
       <div className="sm:flex sm:items-center sm:justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Upload Images</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t.uploadImages.title}</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Upload images to be stored in S3 organized by year and user
+            {t.uploadImages.subtitle}
           </p>
         </div>
       </div>
@@ -250,10 +252,10 @@ export function UploadImages() {
       {/* Year Selection */}
       <div className="mb-6">
         <label htmlFor="year" className="block text-sm font-medium text-gray-700 mb-2">
-          Image Year
+          {t.uploadImages.imageYear}
         </label>
         <p className="text-sm text-gray-500 mb-2">
-          Select the year these images belong to. If images have EXIF data, the year will be extracted automatically.
+          {t.uploadImages.yearHelp}
         </p>
         <select
           id="year"
@@ -292,10 +294,10 @@ export function UploadImages() {
         />
         <PhotoIcon className="mx-auto h-12 w-12 text-gray-400" />
         <div className="mt-4">
-          <span className="text-indigo-600 font-medium">Click to upload</span>
-          <span className="text-gray-500"> or drag and drop</span>
+          <span className="text-indigo-600 font-medium">{t.uploadImages.clickToUpload}</span>
+          <span className="text-gray-500"> {t.uploadImages.orDragAndDrop}</span>
         </div>
-        <p className="text-sm text-gray-500 mt-2">PNG, JPG, GIF, WebP up to 10MB each</p>
+        <p className="text-sm text-gray-500 mt-2">{t.uploadImages.fileTypes}</p>
       </div>
 
       {/* File List */}
@@ -304,18 +306,18 @@ export function UploadImages() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-4">
               <h2 className="text-lg font-medium text-gray-900">
-                Selected Files ({files.length})
+                {t.uploadImages.selectedFiles} ({files.length})
               </h2>
               {uploadComplete && (
                 <div className="flex gap-2 text-sm">
                   {successCount > 0 && (
-                    <span className="text-green-600">{successCount} uploaded</span>
+                    <span className="text-green-600">{successCount} {t.uploadImages.uploaded}</span>
                   )}
                   {duplicateCount > 0 && (
-                    <span className="text-yellow-600">{duplicateCount} duplicates</span>
+                    <span className="text-yellow-600">{duplicateCount} {t.uploadImages.duplicates}</span>
                   )}
                   {errorCount > 0 && (
-                    <span className="text-red-600">{errorCount} failed</span>
+                    <span className="text-red-600">{errorCount} {t.uploadImages.failedPlural}</span>
                   )}
                 </div>
               )}
@@ -325,7 +327,7 @@ export function UploadImages() {
                 onClick={clearAll}
                 className="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
               >
-                Clear All
+                {t.uploadImages.clearAll}
               </button>
               <button
                 onClick={handleUpload}
@@ -334,15 +336,15 @@ export function UploadImages() {
               >
                 <UploadIcon className="h-4 w-4 mr-2" />
                 {uploadMutation.isPending
-                  ? 'Uploading...'
-                  : `Upload ${pendingCount} Image${pendingCount !== 1 ? 's' : ''}`}
+                  ? t.uploadImages.uploadingButton
+                  : `${t.uploadImages.uploadButton} ${pendingCount} ${pendingCount !== 1 ? t.uploadImages.images : t.uploadImages.image}`}
               </button>
             </div>
           </div>
 
           <div className="mb-4 p-3 bg-gray-50 rounded-lg">
             <p className="text-sm text-gray-600">
-              Images will be uploaded to: <code className="bg-gray-200 px-1 rounded">tiles/{year}/{user?.email}/</code>
+              {t.uploadImages.uploadDestination}: <code className="bg-gray-200 px-1 rounded">tiles/{year}/{user?.email}/</code>
             </p>
           </div>
 

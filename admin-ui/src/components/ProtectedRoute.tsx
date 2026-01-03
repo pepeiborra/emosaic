@@ -18,7 +18,9 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
+    // Preserve query parameters (for invitation links with ?u=...&p=...)
+    const loginUrl = `/login${location.search}`;
+    return <Navigate to={loginUrl} state={{ from: location }} replace />;
   }
 
   return <>{children}</>;

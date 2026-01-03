@@ -1,6 +1,7 @@
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getJob, cancelJob } from '../services/api';
+import { useTranslation } from '../i18n';
 import type { Job } from '../types/api';
 
 function StatusIcon({ status }: { status: Job['status'] }) {
@@ -48,39 +49,14 @@ function StatusIcon({ status }: { status: Job['status'] }) {
 }
 
 function StatusText({ status }: { status: Job['status'] }) {
-  const texts: Record<Job['status'], { title: string; description: string }> = {
-    pending: {
-      title: 'Pending',
-      description: 'Job is queued and waiting to start...',
-    },
-    submitted: {
-      title: 'Submitted',
-      description: 'Job has been submitted and is waiting to be picked up...',
-    },
-    running: {
-      title: 'Running',
-      description: 'Generating your mosaic. This may take a few minutes...',
-    },
-    succeeded: {
-      title: 'Completed',
-      description: 'Your mosaic has been generated successfully!',
-    },
-    failed: {
-      title: 'Failed',
-      description: 'Something went wrong during generation.',
-    },
-    cancelled: {
-      title: 'Cancelled',
-      description: 'The job was cancelled.',
-    },
-  };
-
-  const { title, description } = texts[status];
+  const t = useTranslation();
+  const statusKey = status as keyof typeof t.jobStatus.statuses;
+  const statusData = t.jobStatus.statuses[statusKey];
 
   return (
     <div>
-      <h2 className="text-xl font-semibold text-gray-900">{title}</h2>
-      <p className="text-sm text-gray-500 mt-1">{description}</p>
+      <h2 className="text-xl font-semibold text-gray-900">{statusData.title}</h2>
+      <p className="text-sm text-gray-500 mt-1">{statusData.description}</p>
     </div>
   );
 }
@@ -88,6 +64,7 @@ function StatusText({ status }: { status: Job['status'] }) {
 export function JobStatus() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
+  const t = useTranslation();
 
   const { data: job, isLoading, error } = useQuery({
     queryKey: ['job', id],
@@ -114,7 +91,7 @@ export function JobStatus() {
     return (
       <div className="max-w-lg mx-auto text-center py-12">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
-        <p className="text-gray-500 mt-4">Loading job status...</p>
+        <p className="text-gray-500 mt-4">{t.jobStatus.loadingJobStatus}</p>
       </div>
     );
   }
@@ -122,9 +99,9 @@ export function JobStatus() {
   if (error || !job) {
     return (
       <div className="max-w-lg mx-auto text-center py-12">
-        <p className="text-red-600">Failed to load job status</p>
+        <p className="text-red-600">{t.jobStatus.failedToLoad}</p>
         <Link to="/" className="text-indigo-600 hover:text-indigo-700 mt-4 inline-block">
-          Back to Dashboard
+          {t.jobStatus.backToDashboard}
         </Link>
       </div>
     );
@@ -137,7 +114,7 @@ export function JobStatus() {
   return (
     <div className="max-w-lg mx-auto">
       <Link to="/" className="text-sm text-gray-500 hover:text-gray-700 mb-6 inline-block">
-        ← Back to Dashboard
+        &larr; {t.jobStatus.backToDashboard}
       </Link>
 
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
@@ -148,10 +125,10 @@ export function JobStatus() {
         <StatusText status={job.status} />
 
         <div className="mt-6 space-y-2 text-sm text-gray-500">
-          <p>Job ID: {job.id.slice(0, 8)}...</p>
-          <p>Started: {new Date(job.started_at).toLocaleString()}</p>
+          <p>{t.jobStatus.jobId}: {job.id.slice(0, 8)}...</p>
+          <p>{t.jobStatus.started}: {new Date(job.started_at).toLocaleString()}</p>
           {(job.status === 'running' || job.status === 'succeeded') && (
-            <p>Duration: {duration}s</p>
+            <p>{t.jobStatus.durationLabel}: {duration}s</p>
           )}
         </div>
 
@@ -168,7 +145,7 @@ export function JobStatus() {
               disabled={cancelMutation.isPending}
               className="px-4 py-2 text-sm font-medium text-red-600 bg-white border border-red-300 rounded-md hover:bg-red-50 disabled:opacity-50"
             >
-              {cancelMutation.isPending ? 'Cancelling...' : 'Cancel Job'}
+              {cancelMutation.isPending ? t.jobStatus.cancelling : t.jobStatus.cancelJob}
             </button>
           )}
 
@@ -177,7 +154,7 @@ export function JobStatus() {
               to={`/mosaic/${job.mosaic_id}`}
               className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700"
             >
-              View Mosaic
+              {t.jobStatus.viewMosaic}
             </Link>
           )}
 
@@ -186,7 +163,7 @@ export function JobStatus() {
               to={`/mosaic/${job.mosaic_id}`}
               className="px-4 py-2 text-sm font-medium text-indigo-600 bg-white border border-indigo-600 rounded-md hover:bg-indigo-50"
             >
-              Back to Mosaic
+              {t.jobStatus.backToMosaic}
             </Link>
           )}
         </div>

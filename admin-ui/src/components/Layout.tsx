@@ -1,13 +1,7 @@
 import { useState } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-
-const navigation = [
-  { name: 'Dashboard', href: '/', icon: GridIcon },
-  { name: 'Create Mosaic', href: '/create', icon: PlusIcon },
-  { name: 'Upload Images', href: '/upload', icon: UploadIcon },
-  { name: 'Users', href: '/users', icon: UsersIcon },
-];
+import { useTranslation } from '../i18n';
 
 function UploadIcon({ className }: { className?: string }) {
   return (
@@ -61,6 +55,14 @@ export function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, logout } = useAuth();
   const location = useLocation();
+  const t = useTranslation();
+
+  const navigation = [
+    { name: t.nav.dashboard, href: '/', icon: GridIcon },
+    { name: t.nav.createMosaic, href: '/create', icon: PlusIcon },
+    { name: t.nav.uploadImages, href: '/upload', icon: UploadIcon },
+    { name: t.nav.users, href: '/users', icon: UsersIcon },
+  ];
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -113,7 +115,7 @@ export function Layout() {
       <div className="hidden lg:fixed lg:inset-y-0 lg:flex lg:w-64 lg:flex-col">
         <div className="flex min-h-0 flex-1 flex-col border-r border-gray-200 bg-white">
           <div className="flex h-16 shrink-0 items-center px-4 border-b">
-            <span className="text-xl font-semibold text-gray-900">Emosaic Admin</span>
+            <span className="text-xl font-semibold text-gray-900">{t.nav.appTitle}</span>
           </div>
           <nav className="flex-1 space-y-1 px-2 py-4">
             {navigation.map((item) => {
@@ -150,7 +152,7 @@ export function Layout() {
             className="-m-2.5 p-2.5 text-gray-700 lg:hidden"
             onClick={() => setSidebarOpen(true)}
           >
-            <span className="sr-only">Open sidebar</span>
+            <span className="sr-only">{t.nav.openSidebar}</span>
             <MenuIcon className="h-6 w-6" />
           </button>
 
@@ -161,7 +163,7 @@ export function Layout() {
                 onClick={logout}
                 className="text-sm font-medium text-gray-700 hover:text-gray-900"
               >
-                Sign out
+                {t.nav.signOut}
               </button>
             </div>
           </div>

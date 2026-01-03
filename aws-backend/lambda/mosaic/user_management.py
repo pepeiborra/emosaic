@@ -14,6 +14,7 @@ import json
 import os
 import boto3
 from botocore.exceptions import ClientError
+from urllib.parse import unquote
 
 
 # Initialize clients
@@ -264,7 +265,7 @@ def lambda_handler(event, context):
 
         # DELETE /users/{username} - Delete user
         elif http_method == 'DELETE' and 'username' in path_params:
-            username = path_params['username']
+            username = unquote(path_params['username'])
             result = delete_user(username)
             if result['success']:
                 return response(200, result)
@@ -273,7 +274,7 @@ def lambda_handler(event, context):
 
         # POST /users/{username}/resend-invite - Resend invite
         elif http_method == 'POST' and 'username' in path_params and path.endswith('/resend-invite'):
-            username = path_params['username']
+            username = unquote(path_params['username'])
             result = resend_invite(username)
             if result['success']:
                 return response(200, result)
@@ -282,7 +283,7 @@ def lambda_handler(event, context):
 
         # PUT /users/{username}/enable - Enable user
         elif http_method == 'PUT' and 'username' in path_params and path.endswith('/enable'):
-            username = path_params['username']
+            username = unquote(path_params['username'])
             result = enable_user(username)
             if result['success']:
                 return response(200, result)
@@ -291,7 +292,7 @@ def lambda_handler(event, context):
 
         # PUT /users/{username}/disable - Disable user
         elif http_method == 'PUT' and 'username' in path_params and path.endswith('/disable'):
-            username = path_params['username']
+            username = unquote(path_params['username'])
             result = disable_user(username)
             if result['success']:
                 return response(200, result)

@@ -254,6 +254,21 @@ else
     exit 1
 fi
 
+# Update Custom Message Lambda code
+echo "📤 Updating Custom Message Lambda code..."
+cd lambda/mosaic
+zip -q -r ../../custom_message.zip custom_message.py
+cd ../..
+
+CUSTOM_MSG_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_INFRA --query "Stacks[0].Outputs[?OutputKey=='CustomMessageFunctionName'].OutputValue" --output text --region $REGION 2>/dev/null || echo "")
+if [ -n "$CUSTOM_MSG_FN" ] && [ "$CUSTOM_MSG_FN" != "None" ]; then
+    aws lambda update-function-code --function-name $CUSTOM_MSG_FN --zip-file fileb://custom_message.zip --region $REGION > /dev/null
+    echo "✅ Custom Message Lambda code updated"
+else
+    echo "⚠️  Custom Message Lambda not found (may not be deployed yet)"
+fi
+rm -f custom_message.zip
+
 echo ""
 echo "====================================================================="
 echo "Phase 3: Deploying Job Handler (EventBridge + Lambda)"
@@ -639,6 +654,7 @@ if [ -z "$CUSTOM_DOMAIN" ]; then
     MAIN_DISTRIBUTION_ID="${MAIN_DISTRIBUTION_ID:-E2KW8FQIKWXD1D}"
     ADMIN_BUCKET="emosaic-admin-${ENVIRONMENT}"
     ADMIN_WEBSITE_DOMAIN="${ADMIN_BUCKET}.s3-website.${REGION}.amazonaws.com"
+    TILES_BUCKET_DOMAIN="${EXISTING_TILES_BUCKET}.s3.${REGION}.amazonaws.com"
     REDIRECT_FUNCTION_NAME="${ENVIRONMENT}-admin-redirect"
 
     echo ""
@@ -820,7 +836,166 @@ FUNCEOF
         echo "   /admin redirect behavior already exists."
     fi
 
-    rm -f /tmp/cf-config-${ENVIRONMENT}.json /tmp/cf-dist-config-${ENVIRONMENT}.json /tmp/cf-dist-config-with-origin-${ENVIRONMENT}.json /tmp/cf-dist-config-final-${ENVIRONMENT}.json
+    # Now add TilesOrigin and /mosaics/*, /tiles/* behaviors for serving mosaic artifacts
+    echo ""
+    echo "Setting up tiles origin and behaviors for /mosaics/* and /tiles/*..."
+
+    # Get or create Origin Access Control for tiles bucket
+    TILES_OAC_NAME="${ENVIRONMENT}-main-tiles-oac"
+    TILES_OAC_ID=$(aws cloudfront list-origin-access-controls --query "OriginAccessControlList.Items[?Name=='${TILES_OAC_NAME}'].Id" --output text 2>/dev/null || echo "")
+
+    if [ -z "$TILES_OAC_ID" ] || [ "$TILES_OAC_ID" = "None" ]; then
+        echo "   Creating Origin Access Control for tiles bucket..."
+        TILES_OAC_ID=$(aws cloudfront create-origin-access-control \
+            --origin-access-control-config "Name=${TILES_OAC_NAME},Description=OAC for tiles bucket access from main CloudFront,SigningProtocol=sigv4,SigningBehavior=always,OriginAccessControlOriginType=s3" \
+            --query 'OriginAccessControl.Id' --output text)
+        echo "   ✅ Created OAC: $TILES_OAC_ID"
+    else
+        echo "   ✅ Using existing OAC: $TILES_OAC_ID"
+    fi
+
+    # Re-fetch config for tiles origin updates
+    aws cloudfront get-distribution-config --id $MAIN_DISTRIBUTION_ID > /tmp/cf-config-${ENVIRONMENT}.json
+    ETAG=$(jq -r '.ETag' /tmp/cf-config-${ENVIRONMENT}.json)
+    jq '.DistributionConfig' /tmp/cf-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-${ENVIRONMENT}.json
+
+    # Check if TilesOrigin already exists
+    TILES_ORIGIN_EXISTS=$(jq -r '.Origins.Items[] | select(.Id == "TilesOrigin") | .Id' /tmp/cf-dist-config-${ENVIRONMENT}.json 2>/dev/null || echo "")
+
+    if [ -z "$TILES_ORIGIN_EXISTS" ]; then
+        echo "   Adding TilesOrigin..."
+
+        # Add the TilesOrigin with OAC
+        jq --arg domain "$TILES_BUCKET_DOMAIN" --arg oacId "$TILES_OAC_ID" '
+          .Origins.Items += [{
+            "Id": "TilesOrigin",
+            "DomainName": $domain,
+            "OriginPath": "",
+            "CustomHeaders": {"Quantity": 0},
+            "S3OriginConfig": {
+              "OriginAccessIdentity": ""
+            },
+            "ConnectionAttempts": 3,
+            "ConnectionTimeout": 10,
+            "OriginShield": {"Enabled": false},
+            "OriginAccessControlId": $oacId
+          }] |
+          .Origins.Quantity = (.Origins.Items | length)
+        ' /tmp/cf-dist-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-with-tiles-origin-${ENVIRONMENT}.json
+
+        aws cloudfront update-distribution \
+            --id $MAIN_DISTRIBUTION_ID \
+            --distribution-config file:///tmp/cf-dist-config-with-tiles-origin-${ENVIRONMENT}.json \
+            --if-match $ETAG > /dev/null
+        echo "   ✅ TilesOrigin added to CloudFront"
+
+        # Re-fetch config
+        aws cloudfront get-distribution-config --id $MAIN_DISTRIBUTION_ID > /tmp/cf-config-${ENVIRONMENT}.json
+        ETAG=$(jq -r '.ETag' /tmp/cf-config-${ENVIRONMENT}.json)
+        jq '.DistributionConfig' /tmp/cf-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-${ENVIRONMENT}.json
+    else
+        echo "   TilesOrigin already exists."
+    fi
+
+    # Check if /mosaics/* behavior exists
+    MOSAICS_BEHAVIOR=$(jq -r '.CacheBehaviors.Items[] | select(.PathPattern == "/mosaics/*") | .PathPattern' /tmp/cf-dist-config-${ENVIRONMENT}.json 2>/dev/null || echo "")
+
+    if [ -z "$MOSAICS_BEHAVIOR" ]; then
+        echo "   Adding /mosaics/* and /tiles/* cache behaviors..."
+
+        # Add cache behaviors for /mosaics/* and /tiles/*
+        jq '
+          .CacheBehaviors.Items = [{
+            "PathPattern": "/mosaics/*",
+            "TargetOriginId": "TilesOrigin",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": {
+              "Quantity": 2,
+              "Items": ["HEAD", "GET"],
+              "CachedMethods": {"Quantity": 2, "Items": ["HEAD", "GET"]}
+            },
+            "Compress": true,
+            "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+            "SmoothStreaming": false,
+            "FieldLevelEncryptionId": "",
+            "FunctionAssociations": {"Quantity": 0, "Items": []},
+            "LambdaFunctionAssociations": {"Quantity": 0, "Items": []}
+          }, {
+            "PathPattern": "/tiles/*",
+            "TargetOriginId": "TilesOrigin",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": {
+              "Quantity": 2,
+              "Items": ["HEAD", "GET"],
+              "CachedMethods": {"Quantity": 2, "Items": ["HEAD", "GET"]}
+            },
+            "Compress": true,
+            "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+            "SmoothStreaming": false,
+            "FieldLevelEncryptionId": "",
+            "FunctionAssociations": {"Quantity": 0, "Items": []},
+            "LambdaFunctionAssociations": {"Quantity": 0, "Items": []}
+          }, {
+            "PathPattern": "/uploads/*",
+            "TargetOriginId": "TilesOrigin",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": {
+              "Quantity": 2,
+              "Items": ["HEAD", "GET"],
+              "CachedMethods": {"Quantity": 2, "Items": ["HEAD", "GET"]}
+            },
+            "Compress": true,
+            "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+            "SmoothStreaming": false,
+            "FieldLevelEncryptionId": "",
+            "FunctionAssociations": {"Quantity": 0, "Items": []},
+            "LambdaFunctionAssociations": {"Quantity": 0, "Items": []}
+          }] + .CacheBehaviors.Items |
+          .CacheBehaviors.Quantity = (.CacheBehaviors.Items | length)
+        ' /tmp/cf-dist-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-final-${ENVIRONMENT}.json
+
+        aws cloudfront update-distribution \
+            --id $MAIN_DISTRIBUTION_ID \
+            --distribution-config file:///tmp/cf-dist-config-final-${ENVIRONMENT}.json \
+            --if-match $ETAG > /dev/null
+        echo "   ✅ /mosaics/*, /tiles/*, and /uploads/* cache behaviors added"
+
+        # Re-fetch config
+        aws cloudfront get-distribution-config --id $MAIN_DISTRIBUTION_ID > /tmp/cf-config-${ENVIRONMENT}.json
+        ETAG=$(jq -r '.ETag' /tmp/cf-config-${ENVIRONMENT}.json)
+        jq '.DistributionConfig' /tmp/cf-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-${ENVIRONMENT}.json
+    else
+        echo "   /mosaics/* behavior already exists."
+    fi
+
+    # Update tiles bucket policy to allow access from main CloudFront distribution
+    echo ""
+    echo "Updating tiles bucket policy for main CloudFront access..."
+    AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    EXISTING_TILES_POLICY=$(aws s3api get-bucket-policy --bucket $EXISTING_TILES_BUCKET --query Policy --output text 2>/dev/null || echo "")
+
+    # Check if policy already has a statement for the main distribution
+    if echo "$EXISTING_TILES_POLICY" | grep -q "$MAIN_DISTRIBUTION_ID" 2>/dev/null; then
+        echo "   Tiles bucket policy already configured for main CloudFront. Skipping."
+    else
+        NEW_TILES_STATEMENT="{\"Sid\":\"AllowCloudFrontServicePrincipal-main-${ENVIRONMENT}\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"cloudfront.amazonaws.com\"},\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::${EXISTING_TILES_BUCKET}/*\",\"Condition\":{\"StringEquals\":{\"AWS:SourceArn\":\"arn:aws:cloudfront::${AWS_ACCOUNT_ID}:distribution/${MAIN_DISTRIBUTION_ID}\"}}}"
+
+        if [ -z "$EXISTING_TILES_POLICY" ]; then
+            UPDATED_TILES_POLICY="{\"Version\":\"2012-10-17\",\"Statement\":[$NEW_TILES_STATEMENT]}"
+        else
+            UPDATED_TILES_POLICY=$(echo "$EXISTING_TILES_POLICY" | jq --argjson stmt "$NEW_TILES_STATEMENT" '.Statement += [$stmt]')
+        fi
+
+        echo "$UPDATED_TILES_POLICY" > /tmp/tiles-main-bucket-policy-${ENVIRONMENT}.json
+        if aws s3api put-bucket-policy --bucket $EXISTING_TILES_BUCKET --policy file:///tmp/tiles-main-bucket-policy-${ENVIRONMENT}.json; then
+            echo "   ✅ Tiles bucket policy updated for main CloudFront access"
+        else
+            echo "   ⚠️  Failed to update tiles bucket policy. You may need to add it manually."
+        fi
+        rm -f /tmp/tiles-main-bucket-policy-${ENVIRONMENT}.json
+    fi
+
+    rm -f /tmp/cf-config-${ENVIRONMENT}.json /tmp/cf-dist-config-${ENVIRONMENT}.json /tmp/cf-dist-config-with-origin-${ENVIRONMENT}.json /tmp/cf-dist-config-with-tiles-origin-${ENVIRONMENT}.json /tmp/cf-dist-config-final-${ENVIRONMENT}.json
 else
     echo ""
     echo "Custom domain configured ($CUSTOM_DOMAIN) - admin UI will be served by its own CloudFront distribution"
