@@ -7,6 +7,9 @@
 # 3. Job handler (EventBridge + Lambda)
 # 4. Batch infrastructure (ECR, Batch, compute)
 # 5. Mosaic API (API Gateway + Lambda)
+#
+# Options:
+#   CLEAN_FIRST=true  - Delete all stacks before deploying (use for major updates)
 
 set -e
 
@@ -16,13 +19,79 @@ CORS_ORIGIN=${CORS_ORIGIN:-https://casadelmanco.com}
 ADMIN_EMAIL=${ADMIN_EMAIL:-}
 VPC_ID=${VPC_ID:-}
 SUBNET_IDS=${SUBNET_IDS:-}
+USE_EXISTING_RESOURCES=${USE_EXISTING_RESOURCES:-true}
+EXISTING_TILES_BUCKET=${EXISTING_TILES_BUCKET:-emosaic-tiles-prod}
+CLEAN_FIRST=${CLEAN_FIRST:-false}
 
-# Stack names
+# Custom domain configuration (optional)
+CUSTOM_DOMAIN=${CUSTOM_DOMAIN:-}
+ROOT_DOMAIN=${ROOT_DOMAIN:-casadelmanco.com}
+HOSTED_ZONE_ID=${HOSTED_ZONE_ID:-}
+
+# Stack names (in deployment order)
 STACK_TILE_FLAGS="${ENVIRONMENT}-tile-flags-infrastructure"
 STACK_MOSAIC_INFRA="${ENVIRONMENT}-mosaic-infrastructure"
 STACK_JOB_HANDLER="${ENVIRONMENT}-job-handler"
 STACK_BATCH="${ENVIRONMENT}-batch-infrastructure"
 STACK_MOSAIC_API="${ENVIRONMENT}-mosaic-api"
+STACK_PHASE3="${ENVIRONMENT}-phase3-enhancements"
+STACK_CERTIFICATE="${ENVIRONMENT}-domain-certificate"
+STACK_ADMIN_UI="${ENVIRONMENT}-admin-ui"
+
+# Stacks in reverse dependency order (for deletion)
+ALL_STACKS="$STACK_ADMIN_UI $STACK_PHASE3 $STACK_MOSAIC_API $STACK_BATCH $STACK_JOB_HANDLER $STACK_MOSAIC_INFRA $STACK_TILE_FLAGS"
+
+# =============================================================================
+# Clean existing stacks if requested
+# =============================================================================
+if [ "$CLEAN_FIRST" = "true" ]; then
+    echo "🧹 Cleaning existing stacks (Environment: $ENVIRONMENT)..."
+    echo ""
+
+    # Delete stacks one at a time in reverse dependency order
+    # This ensures exports are not in use before we try to delete the exporting stack
+    for stack in $ALL_STACKS; do
+        STATUS=$(aws cloudformation describe-stacks --stack-name $stack --region $REGION --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
+
+        if [ "$STATUS" = "NOT_FOUND" ] || [ "$STATUS" = "DELETE_COMPLETE" ]; then
+            echo "   $stack: not found (skipping)"
+            continue
+        fi
+
+        if [ "$STATUS" = "DELETE_IN_PROGRESS" ]; then
+            echo "   $stack: already deleting, waiting..."
+        else
+            echo "   $stack: deleting (was $STATUS)..."
+            if ! aws cloudformation delete-stack --stack-name $stack --region $REGION 2>/dev/null; then
+                echo "   ⚠️  Failed to initiate deletion for $stack"
+            fi
+        fi
+
+        # Wait for THIS stack to be fully deleted before moving to the next
+        # This ensures dependent stacks are gone before we try to delete their dependencies
+        echo "   Waiting for $stack to be deleted..."
+        while true; do
+            STATUS=$(aws cloudformation describe-stacks --stack-name $stack --region $REGION --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DELETED")
+
+            if [ "$STATUS" = "DELETED" ] || [ "$STATUS" = "DELETE_COMPLETE" ]; then
+                echo "   ✓ $stack deleted"
+                break
+            elif [ "$STATUS" = "DELETE_FAILED" ]; then
+                echo "   ⚠️  $stack: DELETE_FAILED - retrying..."
+                aws cloudformation delete-stack --stack-name $stack --region $REGION 2>/dev/null || true
+            elif [ "$STATUS" = "DELETE_IN_PROGRESS" ]; then
+                sleep 5
+            else
+                echo "   ⚠️  $stack: unexpected status $STATUS"
+                break
+            fi
+        done
+    done
+
+    echo ""
+    echo "✅ Cleanup complete"
+    echo ""
+fi
 
 echo "🚀 Deploying Emosaic Cloud Infrastructure"
 echo "Environment: $ENVIRONMENT"
@@ -43,6 +112,27 @@ if ! aws sts get-caller-identity &> /dev/null; then
 fi
 
 echo "✅ AWS CLI configured"
+
+# Auto-detect VPC and subnet IDs if not provided
+if [ -z "$VPC_ID" ]; then
+    echo "🔍 Auto-detecting default VPC..."
+    VPC_ID=$(aws ec2 describe-vpcs --region $REGION --filters "Name=isDefault,Values=true" --query "Vpcs[0].VpcId" --output text)
+    if [ "$VPC_ID" = "None" ] || [ -z "$VPC_ID" ]; then
+        echo "❌ No default VPC found. Please set VPC_ID manually."
+        exit 1
+    fi
+    echo "   Found VPC: $VPC_ID"
+fi
+
+if [ -z "$SUBNET_IDS" ]; then
+    echo "🔍 Auto-detecting subnets in VPC $VPC_ID..."
+    SUBNET_IDS=$(aws ec2 describe-subnets --region $REGION --filters "Name=vpc-id,Values=$VPC_ID" --query "Subnets[*].SubnetId" --output text | tr '\t' ',')
+    if [ -z "$SUBNET_IDS" ]; then
+        echo "❌ No subnets found in VPC. Please set SUBNET_IDS manually."
+        exit 1
+    fi
+    echo "   Found subnets: $SUBNET_IDS"
+fi
 
 # Validate admin email is provided
 if [ -z "$ADMIN_EMAIL" ]; then
@@ -114,6 +204,8 @@ aws cloudformation deploy \
         Environment=$ENVIRONMENT \
         AdminEmail="$ADMIN_EMAIL" \
         CorsOrigin="$CORS_ORIGIN" \
+        UseExistingBucket="$USE_EXISTING_RESOURCES" \
+        ExistingTilesBucketName="$EXISTING_TILES_BUCKET" \
     --capabilities CAPABILITY_NAMED_IAM \
     --region $REGION
 
@@ -188,6 +280,7 @@ if [ "$SKIP_BATCH" = "false" ]; then
             Environment=$ENVIRONMENT \
             VpcId="$VPC_ID" \
             SubnetIds="$SUBNET_IDS" \
+            UseExistingECR="$USE_EXISTING_RESOURCES" \
         --capabilities CAPABILITY_NAMED_IAM \
         --region $REGION
 
@@ -261,6 +354,55 @@ rm -f list_mosaics.zip get_mosaic.zip create_mosaic.zip update_mosaic.zip delete
 
 echo ""
 echo "====================================================================="
+echo "Phase 6: Deploying Phase 3 Enhancements (Additional APIs)"
+echo "====================================================================="
+echo ""
+
+# Package Phase 3 Lambda functions
+echo "📦 Packaging Phase 3 Lambda functions..."
+cd lambda/mosaic
+
+zip -q -r ../../set_main_mosaic.zip set_main_mosaic.py
+zip -q -r ../../list_jobs.zip list_jobs.py
+zip -q -r ../../get_upload_url.zip get_upload_url.py
+zip -q -r ../../cancel_job.zip cancel_job.py
+
+cd ../..
+
+# Deploy Phase 3 stack
+echo "🏗️  Deploying Phase 3 enhancements stack..."
+aws cloudformation deploy \
+    --template-file cloudformation/phase3-enhancements.yaml \
+    --stack-name $STACK_PHASE3 \
+    --parameter-overrides \
+        Environment=$ENVIRONMENT \
+        CorsOrigin="$CORS_ORIGIN" \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --region $REGION
+
+if [ $? -eq 0 ]; then
+    echo "✅ Phase 3 enhancements deployed"
+else
+    echo "❌ Phase 3 enhancements deployment failed"
+    exit 1
+fi
+
+# Update Phase 3 Lambda code
+echo "📤 Updating Phase 3 Lambda code..."
+SET_MAIN_FN=$(aws cloudformation describe-stacks --stack-name $STACK_PHASE3 --query "Stacks[0].Outputs[?OutputKey=='SetMainMosaicFunctionName'].OutputValue" --output text --region $REGION)
+LIST_JOBS_FN=$(aws cloudformation describe-stacks --stack-name $STACK_PHASE3 --query "Stacks[0].Outputs[?OutputKey=='ListJobsFunctionName'].OutputValue" --output text --region $REGION)
+UPLOAD_URL_FN=$(aws cloudformation describe-stacks --stack-name $STACK_PHASE3 --query "Stacks[0].Outputs[?OutputKey=='GetUploadUrlFunctionName'].OutputValue" --output text --region $REGION)
+CANCEL_JOB_FN=$(aws cloudformation describe-stacks --stack-name $STACK_PHASE3 --query "Stacks[0].Outputs[?OutputKey=='CancelJobFunctionName'].OutputValue" --output text --region $REGION)
+
+aws lambda update-function-code --function-name $SET_MAIN_FN --zip-file fileb://set_main_mosaic.zip --region $REGION > /dev/null
+aws lambda update-function-code --function-name $LIST_JOBS_FN --zip-file fileb://list_jobs.zip --region $REGION > /dev/null
+aws lambda update-function-code --function-name $UPLOAD_URL_FN --zip-file fileb://get_upload_url.zip --region $REGION > /dev/null
+aws lambda update-function-code --function-name $CANCEL_JOB_FN --zip-file fileb://cancel_job.zip --region $REGION > /dev/null
+
+rm -f set_main_mosaic.zip list_jobs.zip get_upload_url.zip cancel_job.zip
+
+echo ""
+echo "====================================================================="
 echo "📋 Deployment Summary"
 echo "====================================================================="
 echo ""
@@ -295,13 +437,19 @@ echo ""
 echo "  Mosaic Management (require Cognito auth):"
 echo "    GET    $API_URL/mosaics                   - List all mosaics"
 echo "    POST   $API_URL/mosaics                   - Create new mosaic"
-echo "    GET    $API_URL/mosaics/{id}              - Get mosaic details"
+echo "    GET    $API_URL/mosaics/{id}              - Get mosaic details (add ?include_jobs=true for history)"
 echo "    PUT    $API_URL/mosaics/{id}              - Update mosaic"
 echo "    DELETE $API_URL/mosaics/{id}              - Delete mosaic"
+echo "    PUT    $API_URL/mosaics/{id}/main         - Set/unset as main mosaic"
 echo ""
 echo "  Job Management (require Cognito auth):"
 echo "    POST   $API_URL/jobs                      - Submit generation job"
+echo "    GET    $API_URL/jobs                      - List jobs (filter by status/mosaic_id)"
 echo "    GET    $API_URL/jobs/{id}                 - Get job status"
+echo "    DELETE $API_URL/jobs/{id}/cancel          - Cancel running job"
+echo ""
+echo "  File Upload (require Cognito auth):"
+echo "    POST   $API_URL/upload-url                - Get presigned URL for S3 upload"
 echo ""
 echo "🎉 Deployment completed successfully!"
 echo ""

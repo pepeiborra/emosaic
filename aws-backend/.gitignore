@@ -1,0 +1,28 @@
+# Lambda deployment packages
+*.zip
+
+# AWS SAM build artifacts
+.aws-sam/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+.env
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

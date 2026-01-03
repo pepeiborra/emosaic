@@ -662,7 +662,7 @@ Resources:
     Properties:
       RestApiId: !ImportValue
         Fn::Sub: '${Environment}-tile-flags-api-id'
-      StageName: !Sub '${Environment}-mosaics'
+      StageName: !Ref Environment
 
 Outputs:
   CognitoAuthorizerId:

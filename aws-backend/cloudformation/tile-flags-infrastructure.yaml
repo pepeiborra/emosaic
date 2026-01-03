@@ -68,7 +68,6 @@ Resources:
   TileFlagsLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub '${Environment}-tile-flags-lambda-role'
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -79,7 +78,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: 'DynamoDBAccess'
+        - PolicyName: !Sub '${Environment}-TileFlagsDynamoDBAccess'
           PolicyDocument:
             Version: '2012-10-17'
             Statement:

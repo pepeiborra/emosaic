@@ -1,0 +1,514 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Emosaic Phase 3 - Additional API endpoints (upload, jobs list, set main, cancel)'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'prod'
+    Description: Environment name
+
+  CorsOrigin:
+    Type: String
+    Default: 'https://casadelmanco.com'
+    Description: CORS origin for API Gateway
+
+Resources:
+  #############################################################################
+  # Additional Lambda Functions
+  #############################################################################
+
+  # Get Upload URL (presigned URLs)
+  GetUploadUrlFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-get-upload-url'
+      Runtime: python3.11
+      Handler: get_upload_url.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: '${Environment}-mosaic-lambda-role-arn'
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': json.dumps({'message': 'Placeholder'})}
+      Environment:
+        Variables:
+          TILES_BUCKET: !ImportValue
+            Fn::Sub: '${Environment}-emosaic-tiles-bucket'
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 30
+
+  # List Jobs
+  ListJobsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-list-jobs'
+      Runtime: python3.11
+      Handler: list_jobs.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: '${Environment}-mosaic-lambda-role-arn'
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': json.dumps({'message': 'Placeholder'})}
+      Environment:
+        Variables:
+          JOBS_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-mosaic-jobs-table'
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 30
+
+  # Set Main Mosaic
+  SetMainMosaicFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-set-main-mosaic'
+      Runtime: python3.11
+      Handler: set_main_mosaic.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: '${Environment}-mosaic-lambda-role-arn'
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': json.dumps({'message': 'Placeholder'})}
+      Environment:
+        Variables:
+          MOSAICS_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-mosaics-table'
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 30
+
+  # Cancel Job
+  CancelJobFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-cancel-job'
+      Runtime: python3.11
+      Handler: cancel_job.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: '${Environment}-mosaic-lambda-role-arn'
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': json.dumps({'message': 'Placeholder'})}
+      Environment:
+        Variables:
+          JOBS_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-mosaic-jobs-table'
+          MOSAICS_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-mosaics-table'
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 30
+
+  #############################################################################
+  # API Gateway Resources
+  #############################################################################
+
+  # /upload-url
+  UploadUrlResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !GetAtt APIRootResource.ResourceId
+      PathPart: 'upload-url'
+
+  # Helper to get root resource
+  APIRootResource:
+    Type: Custom::GetRootResource
+    Properties:
+      ServiceToken: !GetAtt GetRootResourceFunction.Arn
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  GetRootResourceFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-get-root-resource-phase3'
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt GetRootResourceRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  api_id = event['ResourceProperties']['RestApiId']
+                  client = boto3.client('apigateway')
+                  response = client.get_resources(restApiId=api_id, limit=500)
+
+                  root_id = None
+                  for item in response['items']:
+                      if item['path'] == '/':
+                          root_id = item['id']
+                          break
+
+                  if root_id:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS,
+                                     {'ResourceId': root_id}, root_id)
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.FAILED,
+                                     {'Error': 'Root resource not found'})
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED,
+                                 {'Error': str(e)})
+      Timeout: 30
+
+  GetRootResourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: APIGatewayAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                Resource: '*'
+
+  # /mosaics/{mosaicId}/main
+  MosaicMainResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !GetAtt MosaicIdResource.ResourceId
+      PathPart: 'main'
+
+  # Helper to get /mosaics/{mosaicId} resource
+  MosaicIdResource:
+    Type: Custom::GetResource
+    Properties:
+      ServiceToken: !GetAtt GetResourceFunction.Arn
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      Path: '/mosaics/{mosaicId}'
+
+  GetResourceFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-get-resource-phase3'
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt GetRootResourceRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  api_id = event['ResourceProperties']['RestApiId']
+                  path = event['ResourceProperties']['Path']
+                  client = boto3.client('apigateway')
+                  response = client.get_resources(restApiId=api_id, limit=500)
+
+                  resource_id = None
+                  for item in response['items']:
+                      if item['path'] == path:
+                          resource_id = item['id']
+                          break
+
+                  if resource_id:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS,
+                                     {'ResourceId': resource_id}, resource_id)
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.FAILED,
+                                     {'Error': f'Resource {path} not found'})
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED,
+                                 {'Error': str(e)})
+      Timeout: 30
+
+  # /jobs/{jobId}/cancel
+  JobCancelResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !GetAtt JobIdResource.ResourceId
+      PathPart: 'cancel'
+
+  # Helper to get /jobs/{jobId} resource
+  JobIdResource:
+    Type: Custom::GetResource2
+    Properties:
+      ServiceToken: !GetAtt GetResourceFunction.Arn
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      Path: '/jobs/{jobId}'
+
+  #############################################################################
+  # CORS OPTIONS Methods
+  #############################################################################
+
+  UploadUrlOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref UploadUrlResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  MosaicMainOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref MosaicMainResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'PUT,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  JobCancelOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref JobCancelResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  #############################################################################
+  # API Methods
+  #############################################################################
+
+  # POST /upload-url
+  GetUploadUrlMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref UploadUrlResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt GetUploadUrlFunction.Arn
+
+  # GET /jobs (list jobs)
+  ListJobsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !GetAtt JobsResource.ResourceId
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt ListJobsFunction.Arn
+
+  # Helper to get /jobs resource
+  JobsResource:
+    Type: Custom::GetResource3
+    Properties:
+      ServiceToken: !GetAtt GetResourceFunction.Arn
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      Path: '/jobs'
+
+  # PUT /mosaics/{mosaicId}/main
+  SetMainMosaicMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref MosaicMainResource
+      HttpMethod: PUT
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      RequestParameters:
+        method.request.path.mosaicId: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt SetMainMosaicFunction.Arn
+
+  # DELETE /jobs/{jobId}/cancel
+  CancelJobMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref JobCancelResource
+      HttpMethod: DELETE
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      RequestParameters:
+        method.request.path.jobId: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt CancelJobFunction.Arn
+
+  #############################################################################
+  # Lambda Permissions
+  #############################################################################
+
+  GetUploadUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GetUploadUrlFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  ListJobsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ListJobsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  SetMainMosaicPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SetMainMosaicFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  CancelJobPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CancelJobFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  #############################################################################
+  # API Deployment - Required to activate the new endpoints
+  #############################################################################
+
+  Phase3APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - GetUploadUrlMethod
+      - UploadUrlOptionsMethod
+      - ListJobsMethod
+      - SetMainMosaicMethod
+      - MosaicMainOptionsMethod
+      - CancelJobMethod
+      - JobCancelOptionsMethod
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      StageName: !Ref Environment
+
+Outputs:
+  GetUploadUrlFunctionName:
+    Description: Name of the get upload URL function
+    Value: !Ref GetUploadUrlFunction
+
+  ListJobsFunctionName:
+    Description: Name of the list jobs function
+    Value: !Ref ListJobsFunction
+
+  SetMainMosaicFunctionName:
+    Description: Name of the set main mosaic function
+    Value: !Ref SetMainMosaicFunction
+
+  CancelJobFunctionName:
+    Description: Name of the cancel job function
+    Value: !Ref CancelJobFunction

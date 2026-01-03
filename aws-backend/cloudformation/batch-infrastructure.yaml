@@ -20,6 +20,15 @@ Parameters:
     Default: 4
     Description: Maximum vCPUs for Batch compute environment
 
+  UseExistingECR:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Whether to use an existing ECR repository instead of creating one
+
+Conditions:
+  CreateECR: !Equals [!Ref UseExistingECR, 'false']
+
 Resources:
   #############################################################################
   # ECR Repository for emosaic Container Images
@@ -27,6 +36,7 @@ Resources:
 
   EmosaicECRRepository:
     Type: AWS::ECR::Repository
+    Condition: CreateECR
     Properties:
       RepositoryName: !Sub '${Environment}-emosaic'
       ImageScanningConfiguration:
@@ -227,7 +237,7 @@ Resources:
         CROP: 'false'
         RANDOMIZE: '0'
       ContainerProperties:
-        Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EmosaicECRRepository}:latest'
+        Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${Environment}-emosaic:latest'
         ResourceRequirements:
           - Type: VCPU
             Value: '4'
@@ -237,6 +247,8 @@ Resources:
           SizeInGiB: 50
         JobRoleArn: !GetAtt ECSTaskRole.Arn
         ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+        NetworkConfiguration:
+          AssignPublicIp: ENABLED
         FargatePlatformConfiguration:
           PlatformVersion: LATEST
         Environment:
@@ -309,13 +321,13 @@ Resources:
 Outputs:
   ECRRepositoryUri:
     Description: URI of the ECR repository
-    Value: !GetAtt EmosaicECRRepository.RepositoryUri
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${Environment}-emosaic'
     Export:
       Name: !Sub '${Environment}-emosaic-ecr-uri'
 
   ECRRepositoryName:
     Description: Name of the ECR repository
-    Value: !Ref EmosaicECRRepository
+    Value: !Sub '${Environment}-emosaic'
     Export:
       Name: !Sub '${Environment}-emosaic-ecr-name'
 

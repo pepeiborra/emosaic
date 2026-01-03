@@ -21,12 +21,27 @@ Parameters:
     Default: 'https://rc.casadelmanco.com'
     Description: Additional CORS origins (comma-separated)
 
+  UseExistingBucket:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Whether to use an existing S3 bucket instead of creating one
+
+  ExistingTilesBucketName:
+    Type: String
+    Default: ''
+    Description: Name of existing tiles bucket to use (required when UseExistingBucket=true)
+
+Conditions:
+  CreateBucket: !Equals [!Ref UseExistingBucket, 'false']
+
 Resources:
   #############################################################################
   # S3 Bucket for Tile Storage
   #############################################################################
   TilesBucket:
     Type: AWS::S3::Bucket
+    Condition: CreateBucket
     Properties:
       BucketName: !Sub 'emosaic-tiles-${Environment}'
       PublicAccessBlockConfiguration:
@@ -61,6 +76,7 @@ Resources:
 
   TilesBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    Condition: CreateBucket
     Properties:
       Bucket: !Ref TilesBucket
       PolicyDocument:
@@ -175,12 +191,7 @@ Resources:
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true
         InviteMessageTemplate:
-          EmailMessage: |
-            You have been invited to the Emosaic Admin Panel.
-
-            Your temporary password is: {####}
-
-            Please log in at https://casadelmanco.com/admin and change your password.
+          EmailMessage: 'You have been invited to the Emosaic Admin Panel. Your username is {username} and your temporary password is: {####}. Please log in at https://casadelmanco.com/admin and change your password.'
           EmailSubject: 'Emosaic Admin Invitation'
       Policies:
         PasswordPolicy:
@@ -280,8 +291,14 @@ Resources:
                   - s3:DeleteObject
                   - s3:ListBucket
                 Resource:
-                  - !GetAtt TilesBucket.Arn
-                  - !Sub '${TilesBucket.Arn}/*'
+                  - !If
+                    - CreateBucket
+                    - !GetAtt TilesBucket.Arn
+                    - !Sub 'arn:aws:s3:::${ExistingTilesBucketName}'
+                  - !If
+                    - CreateBucket
+                    - !Sub '${TilesBucket.Arn}/*'
+                    - !Sub 'arn:aws:s3:::${ExistingTilesBucketName}/*'
         - PolicyName: BatchSubmitJob
           PolicyDocument:
             Version: '2012-10-17'
@@ -296,13 +313,19 @@ Resources:
 Outputs:
   TilesBucketName:
     Description: Name of the tiles S3 bucket
-    Value: !Ref TilesBucket
+    Value: !If
+      - CreateBucket
+      - !Ref TilesBucket
+      - !Ref ExistingTilesBucketName
     Export:
       Name: !Sub '${Environment}-emosaic-tiles-bucket'
 
   TilesBucketArn:
     Description: ARN of the tiles S3 bucket
-    Value: !GetAtt TilesBucket.Arn
+    Value: !If
+      - CreateBucket
+      - !GetAtt TilesBucket.Arn
+      - !Sub 'arn:aws:s3:::${ExistingTilesBucketName}'
     Export:
       Name: !Sub '${Environment}-emosaic-tiles-bucket-arn'
 
