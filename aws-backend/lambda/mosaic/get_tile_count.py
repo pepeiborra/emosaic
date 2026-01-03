@@ -1,6 +1,11 @@
 """
 Lambda function to get the count of tiles available in S3.
 Uses caching to avoid slow S3 listing on every request.
+
+Caching strategy:
+- Cache total count for the tiles prefix
+- Cache per-folder counts for subtraction when exclusions are specified
+- This allows fast computation of excluded counts without re-listing S3
 """
 import json
 import os
@@ -15,27 +20,21 @@ S3_BUCKET = os.environ.get('S3_BUCKET', '')
 CACHE_TTL = 300
 
 
-def get_cached_count(tiles_prefix: str) -> tuple[int | None, float]:
-    """Get cached count from S3 metadata file. Returns (count, timestamp) or (None, 0)."""
-    cache_key = f"{tiles_prefix.rstrip('/')}.count.json"
+def get_cached_data(cache_key: str) -> tuple[dict | None, float]:
+    """Get cached data from S3. Returns (data, timestamp) or (None, 0)."""
     try:
         response = s3_client.get_object(Bucket=S3_BUCKET, Key=cache_key)
         data = json.loads(response['Body'].read().decode('utf-8'))
-        return data.get('count'), data.get('timestamp', 0)
+        return data, data.get('timestamp', 0)
     except s3_client.exceptions.NoSuchKey:
         return None, 0
     except Exception:
         return None, 0
 
 
-def save_cached_count(tiles_prefix: str, count: int) -> None:
-    """Save count to S3 cache file."""
-    cache_key = f"{tiles_prefix.rstrip('/')}.count.json"
-    data = {
-        'count': count,
-        'timestamp': time.time(),
-        'prefix': tiles_prefix
-    }
+def save_cached_data(cache_key: str, data: dict) -> None:
+    """Save data to S3 cache file."""
+    data['timestamp'] = time.time()
     try:
         s3_client.put_object(
             Bucket=S3_BUCKET,
@@ -47,9 +46,14 @@ def save_cached_count(tiles_prefix: str, count: int) -> None:
         print(f"Failed to save cache: {e}")
 
 
-def count_tiles(tiles_prefix: str, excluded_folders: list[str] = None) -> int:
-    """Count all tiles under the prefix, optionally excluding certain folders."""
-    count = 0
+def count_tiles_by_folder(tiles_prefix: str) -> dict[str, int]:
+    """
+    Count tiles grouped by top-level folder.
+    Returns a dict mapping folder names to their tile counts,
+    plus a '_total' key for the overall count.
+    """
+    folder_counts: dict[str, int] = {}
+    total_count = 0
     continuation_token = None
 
     while True:
@@ -63,28 +67,51 @@ def count_tiles(tiles_prefix: str, excluded_folders: list[str] = None) -> int:
 
         response = s3_client.list_objects_v2(**list_params)
 
-        # Count objects, filtering out excluded folders if specified
-        if excluded_folders:
-            for obj in response.get('Contents', []):
-                key = obj['Key']
-                # Check if this key is in any excluded folder
-                relative_path = key[len(tiles_prefix):]
-                is_excluded = False
-                for folder in excluded_folders:
-                    if relative_path.startswith(folder + '/') or relative_path == folder:
-                        is_excluded = True
-                        break
-                if not is_excluded:
-                    count += 1
-        else:
-            count += response.get('KeyCount', 0)
+        for obj in response.get('Contents', []):
+            key = obj['Key']
+            # Get the relative path from the tiles prefix
+            relative_path = key[len(tiles_prefix):]
+            if not relative_path:
+                continue
+
+            # Extract the top-level folder (or use '_root' for files directly in prefix)
+            parts = relative_path.split('/')
+            if len(parts) > 1:
+                # Build the full folder path for nested folders
+                # e.g., "2023/photos/image.jpg" -> count under "2023" and "2023/photos"
+                folder_path = ''
+                for i, part in enumerate(parts[:-1]):  # Exclude the filename
+                    if folder_path:
+                        folder_path += '/'
+                    folder_path += part
+                    folder_counts[folder_path] = folder_counts.get(folder_path, 0) + 1
+
+            total_count += 1
 
         if response.get('IsTruncated'):
             continuation_token = response.get('NextContinuationToken')
         else:
             break
 
-    return count
+    folder_counts['_total'] = total_count
+    return folder_counts
+
+
+def get_folder_counts(tiles_prefix: str, force_refresh: bool = False) -> dict[str, int]:
+    """Get folder counts, using cache if available and fresh."""
+    cache_key = f"{tiles_prefix.rstrip('/')}.folder_counts.json"
+
+    if not force_refresh:
+        cached_data, cached_time = get_cached_data(cache_key)
+        cache_age = time.time() - cached_time
+
+        if cached_data is not None and cache_age < CACHE_TTL:
+            return cached_data.get('counts', {})
+
+    # Recount and cache
+    counts = count_tiles_by_folder(tiles_prefix)
+    save_cached_data(cache_key, {'counts': counts})
+    return counts
 
 
 def lambda_handler(event, context):
@@ -107,10 +134,33 @@ def lambda_handler(event, context):
         if not tiles_prefix.endswith('/'):
             tiles_prefix += '/'
 
-        # When excluded_folders is specified, skip cache and count directly
-        # (caching with exclusions would require separate cache keys for each combination)
+        # Get folder counts (from cache or fresh)
+        folder_counts = get_folder_counts(tiles_prefix, force_refresh)
+        total_count = folder_counts.get('_total', 0)
+
         if excluded_folders:
-            tile_count = count_tiles(tiles_prefix, excluded_folders)
+            # Subtract excluded folder counts from total
+            # Use a set to track which folders we've already subtracted
+            # (to avoid double-counting nested folders)
+            excluded_count = 0
+            excluded_set = set(excluded_folders)
+
+            for folder in excluded_folders:
+                # Only count this folder if no parent folder is also excluded
+                # (parent exclusion already covers the children)
+                parent_excluded = False
+                parts = folder.split('/')
+                for i in range(len(parts) - 1):
+                    parent = '/'.join(parts[:i + 1])
+                    if parent in excluded_set:
+                        parent_excluded = True
+                        break
+
+                if not parent_excluded:
+                    excluded_count += folder_counts.get(folder, 0)
+
+            tile_count = total_count - excluded_count
+
             return {
                 'statusCode': 200,
                 'headers': {
@@ -122,34 +172,9 @@ def lambda_handler(event, context):
                     'count': tile_count,
                     'prefix': tiles_prefix,
                     'excluded_folders': excluded_folders,
-                    'cached': False
+                    'cached': True  # Always uses cached folder counts
                 })
             }
-
-        # Check cache first (only for non-excluded counts)
-        cached_count, cached_time = get_cached_count(tiles_prefix)
-        cache_age = time.time() - cached_time
-
-        if cached_count is not None and cache_age < CACHE_TTL and not force_refresh:
-            # Return cached value
-            return {
-                'statusCode': 200,
-                'headers': {
-                    'Content-Type': 'application/json',
-                    'Access-Control-Allow-Origin': cors_origin,
-                    'Access-Control-Allow-Credentials': 'true'
-                },
-                'body': json.dumps({
-                    'count': cached_count,
-                    'prefix': tiles_prefix,
-                    'cached': True,
-                    'cache_age_seconds': int(cache_age)
-                })
-            }
-
-        # Count tiles and update cache
-        tile_count = count_tiles(tiles_prefix)
-        save_cached_count(tiles_prefix, tile_count)
 
         return {
             'statusCode': 200,
@@ -159,9 +184,9 @@ def lambda_handler(event, context):
                 'Access-Control-Allow-Credentials': 'true'
             },
             'body': json.dumps({
-                'count': tile_count,
+                'count': total_count,
                 'prefix': tiles_prefix,
-                'cached': False
+                'cached': True
             })
         }
 
