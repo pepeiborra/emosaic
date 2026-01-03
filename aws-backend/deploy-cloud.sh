@@ -472,13 +472,206 @@ else
 fi
 
 if [ $? -eq 0 ]; then
-    echo "✅ Admin UI deployed"
+    echo "✅ Admin UI S3 bucket deployed"
 else
     echo "❌ Admin UI deployment failed"
     exit 1
 fi
 
+# Only add /admin/* route to main CloudFront for prod (when no custom domain)
+# Environments with CUSTOM_DOMAIN have their own CloudFront distribution
+if [ -z "$CUSTOM_DOMAIN" ]; then
+    MAIN_DISTRIBUTION_ID="${MAIN_DISTRIBUTION_ID:-E2KW8FQIKWXD1D}"
+    ADMIN_BUCKET="emosaic-admin-${ENVIRONMENT}"
+    ADMIN_WEBSITE_DOMAIN="${ADMIN_BUCKET}.s3-website.${REGION}.amazonaws.com"
+    REDIRECT_FUNCTION_NAME="${ENVIRONMENT}-admin-redirect"
+
     echo ""
+    echo "Setting up /admin redirect function..."
+
+    # Create or update the CloudFront Function for /admin -> /admin/ redirect
+    # Write function code to a temp file (AWS CLI reads from file to avoid base64 issues)
+    cat > /tmp/admin-redirect-function-${ENVIRONMENT}.js << 'FUNCEOF'
+function handler(event) {
+  return {
+    statusCode: 301,
+    statusDescription: "Moved Permanently",
+    headers: {
+      "location": { value: "/admin/" }
+    }
+  };
+}
+FUNCEOF
+
+    # Check if function exists
+    EXISTING_FUNCTION=$(aws cloudfront list-functions --query "FunctionList.Items[?Name=='${REDIRECT_FUNCTION_NAME}'].FunctionMetadata.FunctionARN" --output text 2>/dev/null || echo "")
+
+    if [ -n "$EXISTING_FUNCTION" ] && [ "$EXISTING_FUNCTION" != "None" ]; then
+        echo "   Updating existing redirect function..."
+        # Get the ETag for update
+        FUNC_ETAG=$(aws cloudfront describe-function --name "$REDIRECT_FUNCTION_NAME" --query 'ETag' --output text)
+        aws cloudfront update-function \
+            --name "$REDIRECT_FUNCTION_NAME" \
+            --function-config Comment="Redirect /admin to /admin/",Runtime=cloudfront-js-2.0 \
+            --function-code fileb:///tmp/admin-redirect-function-${ENVIRONMENT}.js \
+            --if-match "$FUNC_ETAG" > /dev/null
+        # Publish the function
+        FUNC_ETAG=$(aws cloudfront describe-function --name "$REDIRECT_FUNCTION_NAME" --query 'ETag' --output text)
+        aws cloudfront publish-function --name "$REDIRECT_FUNCTION_NAME" --if-match "$FUNC_ETAG" > /dev/null
+        REDIRECT_FUNCTION_ARN=$(aws cloudfront describe-function --name "$REDIRECT_FUNCTION_NAME" --stage LIVE --query 'FunctionSummary.FunctionMetadata.FunctionARN' --output text)
+    else
+        echo "   Creating redirect function..."
+        aws cloudfront create-function \
+            --name "$REDIRECT_FUNCTION_NAME" \
+            --function-config Comment="Redirect /admin to /admin/",Runtime=cloudfront-js-2.0 \
+            --function-code fileb:///tmp/admin-redirect-function-${ENVIRONMENT}.js > /dev/null
+        # Publish the function
+        FUNC_ETAG=$(aws cloudfront describe-function --name "$REDIRECT_FUNCTION_NAME" --query 'ETag' --output text)
+        aws cloudfront publish-function --name "$REDIRECT_FUNCTION_NAME" --if-match "$FUNC_ETAG" > /dev/null
+        REDIRECT_FUNCTION_ARN=$(aws cloudfront describe-function --name "$REDIRECT_FUNCTION_NAME" --stage LIVE --query 'FunctionSummary.FunctionMetadata.FunctionARN' --output text)
+    fi
+    rm -f /tmp/admin-redirect-function-${ENVIRONMENT}.js
+    echo "   ✅ Redirect function ready: $REDIRECT_FUNCTION_ARN"
+
+    echo ""
+    echo "Adding /admin/* route to main CloudFront distribution ($MAIN_DISTRIBUTION_ID)..."
+    echo "Admin S3 website domain: $ADMIN_WEBSITE_DOMAIN"
+
+    # Get current distribution config
+    aws cloudfront get-distribution-config --id $MAIN_DISTRIBUTION_ID > /tmp/cf-config.json
+    ETAG=$(jq -r '.ETag' /tmp/cf-config.json)
+    jq '.DistributionConfig' /tmp/cf-config.json > /tmp/cf-dist-config.json
+
+    # Check current origin domain
+    CURRENT_ORIGIN_DOMAIN=$(jq -r '.Origins.Items[] | select(.Id == "AdminUIOrigin") | .DomainName' /tmp/cf-dist-config.json 2>/dev/null || echo "")
+
+    if [ -n "$CURRENT_ORIGIN_DOMAIN" ] && [ "$CURRENT_ORIGIN_DOMAIN" != "$ADMIN_WEBSITE_DOMAIN" ]; then
+        echo "   Updating AdminUIOrigin domain from $CURRENT_ORIGIN_DOMAIN to $ADMIN_WEBSITE_DOMAIN..."
+
+        # Update the origin domain
+        jq --arg domain "$ADMIN_WEBSITE_DOMAIN" '
+          .Origins.Items = [.Origins.Items[] | if .Id == "AdminUIOrigin" then .DomainName = $domain else . end]
+        ' /tmp/cf-dist-config.json > /tmp/cf-dist-config-final.json
+
+        aws cloudfront update-distribution \
+            --id $MAIN_DISTRIBUTION_ID \
+            --distribution-config file:///tmp/cf-dist-config-final.json \
+            --if-match $ETAG > /dev/null
+        echo "   ✅ AdminUIOrigin domain updated"
+
+        # Re-fetch config for next updates
+        aws cloudfront get-distribution-config --id $MAIN_DISTRIBUTION_ID > /tmp/cf-config-${ENVIRONMENT}.json
+        ETAG=$(jq -r '.ETag' /tmp/cf-config-${ENVIRONMENT}.json)
+        jq '.DistributionConfig' /tmp/cf-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-${ENVIRONMENT}.json
+    elif [ -n "$CURRENT_ORIGIN_DOMAIN" ]; then
+        echo "   /admin/* origin already configured correctly."
+    else
+        echo "   Adding AdminUIOrigin and /admin/* cache behavior..."
+
+        # Add the new origin (using S3 website endpoint for SPA support)
+        jq --arg domain "$ADMIN_WEBSITE_DOMAIN" '
+          .Origins.Items += [{
+            "Id": "AdminUIOrigin",
+            "DomainName": $domain,
+            "OriginPath": "",
+            "CustomHeaders": {"Quantity": 0},
+            "CustomOriginConfig": {
+              "HTTPPort": 80,
+              "HTTPSPort": 443,
+              "OriginProtocolPolicy": "http-only",
+              "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
+              "OriginReadTimeout": 30,
+              "OriginKeepaliveTimeout": 5
+            },
+            "ConnectionAttempts": 3,
+            "ConnectionTimeout": 10,
+            "OriginShield": {"Enabled": false}
+          }] |
+          .Origins.Quantity = (.Origins.Items | length)
+        ' /tmp/cf-dist-config.json > /tmp/cf-dist-config-with-origin.json
+
+        # Add the cache behavior for /admin/*
+        jq '
+          .CacheBehaviors.Items = [{
+            "PathPattern": "/admin/*",
+            "TargetOriginId": "AdminUIOrigin",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": {
+              "Quantity": 2,
+              "Items": ["HEAD", "GET"],
+              "CachedMethods": {"Quantity": 2, "Items": ["HEAD", "GET"]}
+            },
+            "Compress": true,
+            "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+            "SmoothStreaming": false,
+            "FieldLevelEncryptionId": "",
+            "FunctionAssociations": {"Quantity": 0, "Items": []},
+            "LambdaFunctionAssociations": {"Quantity": 0, "Items": []}
+          }] + .CacheBehaviors.Items |
+          .CacheBehaviors.Quantity = (.CacheBehaviors.Items | length)
+        ' /tmp/cf-dist-config-with-origin.json > /tmp/cf-dist-config-final.json
+
+        aws cloudfront update-distribution \
+            --id $MAIN_DISTRIBUTION_ID \
+            --distribution-config file:///tmp/cf-dist-config-final.json \
+            --if-match $ETAG > /dev/null
+        echo "   ✅ AdminUIOrigin and /admin/* route added to CloudFront"
+
+        # Re-fetch config for next updates
+        aws cloudfront get-distribution-config --id $MAIN_DISTRIBUTION_ID > /tmp/cf-config-${ENVIRONMENT}.json
+        ETAG=$(jq -r '.ETag' /tmp/cf-config-${ENVIRONMENT}.json)
+        jq '.DistributionConfig' /tmp/cf-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-${ENVIRONMENT}.json
+    fi
+
+    # Now check if /admin (exact) behavior exists and add it with redirect function
+    ADMIN_EXACT_BEHAVIOR=$(jq -r '.CacheBehaviors.Items[] | select(.PathPattern == "/admin") | .PathPattern' /tmp/cf-dist-config-${ENVIRONMENT}.json 2>/dev/null || echo "")
+
+    if [ -z "$ADMIN_EXACT_BEHAVIOR" ]; then
+        echo "   Adding /admin redirect behavior..."
+
+        # Add cache behavior for /admin (exact match) with redirect function
+        jq --arg funcArn "$REDIRECT_FUNCTION_ARN" '
+          .CacheBehaviors.Items = [{
+            "PathPattern": "/admin",
+            "TargetOriginId": "AdminUIOrigin",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": {
+              "Quantity": 2,
+              "Items": ["HEAD", "GET"],
+              "CachedMethods": {"Quantity": 2, "Items": ["HEAD", "GET"]}
+            },
+            "Compress": true,
+            "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+            "SmoothStreaming": false,
+            "FieldLevelEncryptionId": "",
+            "FunctionAssociations": {
+              "Quantity": 1,
+              "Items": [{
+                "EventType": "viewer-request",
+                "FunctionARN": $funcArn
+              }]
+            },
+            "LambdaFunctionAssociations": {"Quantity": 0, "Items": []}
+          }] + .CacheBehaviors.Items |
+          .CacheBehaviors.Quantity = (.CacheBehaviors.Items | length)
+        ' /tmp/cf-dist-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-final-${ENVIRONMENT}.json
+
+        aws cloudfront update-distribution \
+            --id $MAIN_DISTRIBUTION_ID \
+            --distribution-config file:///tmp/cf-dist-config-final-${ENVIRONMENT}.json \
+            --if-match $ETAG > /dev/null
+        echo "   ✅ /admin redirect behavior added"
+    else
+        echo "   /admin redirect behavior already exists."
+    fi
+
+    rm -f /tmp/cf-config.json /tmp/cf-dist-config.json /tmp/cf-dist-config-with-origin.json /tmp/cf-dist-config-final.json
+else
+    echo ""
+    echo "Custom domain configured ($CUSTOM_DOMAIN) - admin UI will be served by its own CloudFront distribution"
+fi
+
+echo ""
 echo "====================================================================="
 echo "📋 Deployment Summary"
 echo "====================================================================="
@@ -495,11 +688,8 @@ if [ "$SKIP_BATCH" = "false" ]; then
     JOB_QUEUE=$(aws cloudformation describe-stacks --stack-name $STACK_BATCH --query "Stacks[0].Outputs[?OutputKey=='BatchJobQueueName'].OutputValue" --output text --region $REGION)
 fi
 
-# Get Admin UI URL
-ADMIN_UI_URL=$(aws cloudformation describe-stacks --stack-name $STACK_ADMIN_UI --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue" --output text --region $REGION)
-if [ -n "$CUSTOM_DOMAIN" ]; then
-    ADMIN_UI_URL="https://$CUSTOM_DOMAIN"
-fi
+# Admin UI is served from main domain at /admin/
+ADMIN_UI_URL="https://casadelmanco.com/admin/"
 
 echo "🎯 API Gateway URL: $API_URL"
 echo "🪣 S3 Tiles Bucket: $TILES_BUCKET"
@@ -541,13 +731,15 @@ echo "Next steps:"
 echo "1. Check your email ($ADMIN_EMAIL) for Cognito temporary password"
 
 if [ "$SKIP_BATCH" = "false" ]; then
-    echo "2. Build and push Docker image: ./build-and-push.sh"
-    echo "3. Upload source images and tiles to S3 bucket: $TILES_BUCKET"
-    echo "4. Test mosaic generation by submitting a job via API"
-    echo "5. Update frontend to use these API endpoints"
-    echo "6. Configure CloudFront for the S3 bucket (Phase 5)"
+    echo "2. Build and deploy Admin UI: ./deploy-admin-ui.sh"
+    echo "3. Build and push Docker image: ./build-and-push.sh"
+    echo "4. Upload source images and tiles to S3 bucket: $TILES_BUCKET"
+    echo "5. Test mosaic generation by submitting a job via API"
+    echo "6. Update frontend to use these API endpoints"
+    echo "   Note: CloudFront changes take 5-15 minutes to propagate"
 else
-    echo "2. Deploy Batch infrastructure with VPC_ID and SUBNET_IDS"
-    echo "3. Update frontend to use these API endpoints"
-    echo "4. Configure CloudFront for the S3 bucket"
+    echo "2. Build and deploy Admin UI: ./deploy-admin-ui.sh"
+    echo "3. Deploy Batch infrastructure with VPC_ID and SUBNET_IDS"
+    echo "4. Update frontend to use these API endpoints"
+    echo "   Note: CloudFront changes take 5-15 minutes to propagate"
 fi
