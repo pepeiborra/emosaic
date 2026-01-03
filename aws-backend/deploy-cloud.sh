@@ -38,7 +38,7 @@ STACK_PHASE3="${ENVIRONMENT}-phase3-enhancements"
 STACK_CERTIFICATE="${ENVIRONMENT}-domain-certificate"
 STACK_ADMIN_UI="${ENVIRONMENT}-admin-ui"
 
-# Stacks in reverse dependency order (for deletion)
+# Stacks in reverse dependency order (for deletion) - main region
 ALL_STACKS="$STACK_ADMIN_UI $STACK_PHASE3 $STACK_MOSAIC_API $STACK_BATCH $STACK_JOB_HANDLER $STACK_MOSAIC_INFRA $STACK_TILE_FLAGS"
 
 # =============================================================================
@@ -47,6 +47,32 @@ ALL_STACKS="$STACK_ADMIN_UI $STACK_PHASE3 $STACK_MOSAIC_API $STACK_BATCH $STACK_
 if [ "$CLEAN_FIRST" = "true" ]; then
     echo "🧹 Cleaning existing stacks (Environment: $ENVIRONMENT)..."
     echo ""
+
+    # First, delete the certificate stack in us-east-1 (it's a dependency for admin-ui)
+    CERT_STATUS=$(aws cloudformation describe-stacks --stack-name $STACK_CERTIFICATE --region us-east-1 --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
+    if [ "$CERT_STATUS" != "NOT_FOUND" ] && [ "$CERT_STATUS" != "DELETE_COMPLETE" ]; then
+        echo "   $STACK_CERTIFICATE (us-east-1): deleting (was $CERT_STATUS)..."
+        aws cloudformation delete-stack --stack-name $STACK_CERTIFICATE --region us-east-1 2>/dev/null || true
+        echo "   Waiting for $STACK_CERTIFICATE to be deleted..."
+        while true; do
+            CERT_STATUS=$(aws cloudformation describe-stacks --stack-name $STACK_CERTIFICATE --region us-east-1 --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DELETED")
+            if [ "$CERT_STATUS" = "DELETED" ] || [ "$CERT_STATUS" = "DELETE_COMPLETE" ]; then
+                echo "   ✓ $STACK_CERTIFICATE deleted"
+                break
+            elif [ "$CERT_STATUS" = "DELETE_FAILED" ] || [ "$CERT_STATUS" = "ROLLBACK_COMPLETE" ]; then
+                echo "   ⚠️  $STACK_CERTIFICATE: $CERT_STATUS - retrying..."
+                aws cloudformation delete-stack --stack-name $STACK_CERTIFICATE --region us-east-1 2>/dev/null || true
+                sleep 5
+            elif [ "$CERT_STATUS" = "DELETE_IN_PROGRESS" ]; then
+                sleep 5
+            else
+                echo "   ⚠️  $STACK_CERTIFICATE: unexpected status $CERT_STATUS"
+                break
+            fi
+        done
+    else
+        echo "   $STACK_CERTIFICATE (us-east-1): not found (skipping)"
+    fi
 
     # Delete stacks one at a time in reverse dependency order
     # This ensures exports are not in use before we try to delete the exporting stack
@@ -76,9 +102,10 @@ if [ "$CLEAN_FIRST" = "true" ]; then
             if [ "$STATUS" = "DELETED" ] || [ "$STATUS" = "DELETE_COMPLETE" ]; then
                 echo "   ✓ $stack deleted"
                 break
-            elif [ "$STATUS" = "DELETE_FAILED" ]; then
-                echo "   ⚠️  $stack: DELETE_FAILED - retrying..."
+            elif [ "$STATUS" = "DELETE_FAILED" ] || [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+                echo "   ⚠️  $stack: $STATUS - retrying..."
                 aws cloudformation delete-stack --stack-name $stack --region $REGION 2>/dev/null || true
+                sleep 5
             elif [ "$STATUS" = "DELETE_IN_PROGRESS" ]; then
                 sleep 5
             else
