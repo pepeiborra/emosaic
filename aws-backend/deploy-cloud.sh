@@ -995,6 +995,36 @@ FUNCEOF
         rm -f /tmp/tiles-main-bucket-policy-${ENVIRONMENT}.json
     fi
 
+    # Update default behavior to point to AdminUIOrigin (for the landing page)
+    # This allows the "set as main" mosaic feature to update the landing page
+    echo ""
+    echo "Updating default behavior to serve landing page from admin bucket..."
+
+    # Re-fetch config for default behavior update
+    aws cloudfront get-distribution-config --id $MAIN_DISTRIBUTION_ID > /tmp/cf-config-${ENVIRONMENT}.json
+    ETAG=$(jq -r '.ETag' /tmp/cf-config-${ENVIRONMENT}.json)
+    jq '.DistributionConfig' /tmp/cf-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-${ENVIRONMENT}.json
+
+    # Check current default origin
+    CURRENT_DEFAULT_ORIGIN=$(jq -r '.DefaultCacheBehavior.TargetOriginId' /tmp/cf-dist-config-${ENVIRONMENT}.json)
+
+    if [ "$CURRENT_DEFAULT_ORIGIN" != "AdminUIOrigin" ]; then
+        echo "   Current default origin: $CURRENT_DEFAULT_ORIGIN"
+        echo "   Updating to: AdminUIOrigin"
+
+        # Update the default cache behavior to point to AdminUIOrigin
+        jq '.DefaultCacheBehavior.TargetOriginId = "AdminUIOrigin"' /tmp/cf-dist-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-final-${ENVIRONMENT}.json
+
+        aws cloudfront update-distribution \
+            --id $MAIN_DISTRIBUTION_ID \
+            --distribution-config file:///tmp/cf-dist-config-final-${ENVIRONMENT}.json \
+            --if-match $ETAG > /dev/null
+        echo "   ✅ Default behavior updated - landing page now served from admin bucket"
+        echo "   Note: 'Set as Main' mosaic feature will now update the landing page"
+    else
+        echo "   Default behavior already points to AdminUIOrigin. Skipping."
+    fi
+
     rm -f /tmp/cf-config-${ENVIRONMENT}.json /tmp/cf-dist-config-${ENVIRONMENT}.json /tmp/cf-dist-config-with-origin-${ENVIRONMENT}.json /tmp/cf-dist-config-with-tiles-origin-${ENVIRONMENT}.json /tmp/cf-dist-config-final-${ENVIRONMENT}.json
 else
     echo ""
