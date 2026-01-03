@@ -445,6 +445,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("Mosaic generation failed: {}", e))?;
 
             let output = img_and_stats.img;
+
+            eprintln!("✓ Mosaic generation completed successfully");
+            eprintln!("📝 Writing output file to {}", output_path.display());
+
             if tint_opacity > 0.0 {
                 // Create overlay more efficiently using from_fn
                 let alpha_value = (255.0 * tint_opacity) as u8;
@@ -469,26 +473,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .save_with_format(&output_path, ImageFormat::Png)
                     .map_err(|e| {
                         format!(
-                            "Failed to save output image to {}: {}",
+                            "❌ Failed to save output image to {}: {}\n💡 Ensure the directory is writable and has sufficient disk space",
                             output_path.display(),
                             e
                         )
                     })?;
-                print_runtime_stats(start_time, &memory_monitor);
-                return Ok(());
+            } else {
+                output
+                    .save_with_format(&output_path, ImageFormat::Png)
+                    .map_err(|e| {
+                        format!(
+                            "❌ Failed to save output image to {}: {}\n💡 Ensure the directory is writable and has sufficient disk space",
+                            output_path.display(),
+                            e
+                        )
+                    })?;
             }
-
-            eprintln!("✓ Mosaic generation completed successfully");
-            eprintln!("📝 Writing output file to {}", output_path.display());
-            output
-                .save_with_format(&output_path, ImageFormat::Png)
-                .map_err(|e| {
-                    format!(
-                        "❌ Failed to save output image to {}: {}\n💡 Ensure the directory is writable and has sufficient disk space",
-                        output_path.display(),
-                        e
-                    )
-                })?;
 
             if let Some(stats_img) = img_and_stats.stats_img {
                 let stats_path = output_path.with_extension("stats.png");
