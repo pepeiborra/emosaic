@@ -435,6 +435,19 @@ body {
     z-index: 5;
 }
 
+/* Year filter styles - optimized for large mosaics (6000+ tiles)
+   Uses class-based approach instead of attribute selectors for O(n) -> O(k) performance
+   where k is the number of matching tiles (typically <500) */
+.zoom-container.year-filter-active .tile-region {
+    pointer-events: none;
+    background-color: rgba(0, 0, 0, 0.7);
+}
+
+.zoom-container.year-filter-active .tile-region.year-match {
+    pointer-events: auto;
+    background-color: transparent;
+}
+
 /* Mobile viewport fixes */
 @media only screen and (hover: none) and (pointer: coarse){
 

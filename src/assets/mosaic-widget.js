@@ -1119,6 +1119,27 @@ function cleanupModalEvents(modal) {
 // Year filter functionality
 // Note: yearFilterMinYear and yearFilterMaxYear are defined in the HTML
 
+// Year index for O(1) tile lookup by year - built once at initialization
+let tilesByYear = null; // Map: year string -> array of tile elements
+let currentYearMatchTiles = []; // Currently highlighted tiles (for cleanup)
+
+function buildYearIndex() {
+    if (tilesByYear !== null) return; // Already built
+
+    tilesByYear = new Map();
+    const tiles = document.querySelectorAll('.tile-region');
+
+    tiles.forEach(tile => {
+        const year = tile.getAttribute('data-year') || 'unknown';
+        if (!tilesByYear.has(year)) {
+            tilesByYear.set(year, []);
+        }
+        tilesByYear.get(year).push(tile);
+    });
+
+    console.log('Year index built with', tilesByYear.size, 'unique years for', tiles.length, 'tiles');
+}
+
 function setupYearFilter() {
     const slider = document.getElementById('year-slider');
     const display = document.getElementById('year-display');
@@ -1127,6 +1148,9 @@ function setupYearFilter() {
         console.log('Year filter elements not found');
         return;
     }
+
+    // Build year index for fast filtering
+    buildYearIndex();
 
     console.log('Setting up year filter with range:', yearFilterMinYear, 'to', yearFilterMaxYear);
 
@@ -1139,7 +1163,6 @@ function setupYearFilter() {
 
     slider.addEventListener('input', function() {
         const value = parseInt(this.value);
-        console.log('Slider value changed to:', value);
         updateYearFilter(value);
     });
 };
@@ -1153,19 +1176,30 @@ function updateYearFilter(sliderValue) {
         return;
     }
 
-    console.log('Updating year filter with value:', sliderValue);
+    // Clear previous matches first (always fast - only touches previously matched tiles)
+    currentYearMatchTiles.forEach(tile => {
+        tile.classList.remove('year-match');
+    });
+    currentYearMatchTiles = [];
 
     if (sliderValue === 0) {
-        // Show all tiles - remove the filter attribute
+        // Show all tiles - remove filter mode
         display.textContent = 'All Years';
-        zoomContainer.removeAttribute('data-filter-year');
-        console.log('Showing all tiles (removed data-filter-year attribute)');
+        zoomContainer.classList.remove('year-filter-active');
     } else {
-        // Filter by specific year - set the filter attribute
+        // Filter by specific year
         const selectedYear = yearFilterMinYear + sliderValue - 1;
         display.textContent = String(selectedYear);
-        zoomContainer.setAttribute('data-filter-year', selectedYear);
-        console.log('Filtering by year:', selectedYear, '(set data-filter-year attribute)');
+
+        // Activate filter mode (dims all tiles via CSS)
+        zoomContainer.classList.add('year-filter-active');
+
+        // Highlight only matching tiles (fast - typically <500 tiles vs 6000+)
+        const matchingTiles = tilesByYear?.get(String(selectedYear)) || [];
+        matchingTiles.forEach(tile => {
+            tile.classList.add('year-match');
+        });
+        currentYearMatchTiles = matchingTiles;
     }
 };
 

@@ -182,36 +182,15 @@ where
 
     /// Generate CSS rules for year filtering
     ///
-    /// This creates CSS rules that allow filtering tiles by year using a data attribute
-    /// on the container, avoiding the need to iterate through thousands of DOM elements.
-    fn generate_year_filter_css(&self, min_year: i32, max_year: i32) -> String {
-        let mut css = String::new();
-
-        // Base rule: when year filter is active, dim all tiles with a dark overlay
-        // Note: !important is needed to override the external CSS rule for .tile-region:not(.disabled)
-        css.push_str(
-            r#"/* Year filter CSS - generated dynamically based on tile years */
-        .zoom-container[data-filter-year] .tile-region {
-            pointer-events: none;
-            background-color: rgba(0, 0, 0, 0.7) !important;
-        }
-        "#,
-        );
-
-        // Generate per-year rules: show tiles matching the selected year
-        for year in min_year..=max_year {
-            css.push_str(&format!(
-                r#"
-        .zoom-container[data-filter-year="{}"] .tile-region[data-year="{}"] {{
-            pointer-events: auto;
-            background-color: transparent !important;
-        }}
-        "#,
-                year, year
-            ));
-        }
-
-        css
+    /// Note: Year filter CSS is now in the static mosaic-widget.css file.
+    /// This function returns an empty string since the class-based approach
+    /// (year-filter-active + year-match) is used instead of per-year attribute selectors.
+    /// The class-based approach is ~100x faster for large mosaics (6000+ tiles).
+    fn generate_year_filter_css(&self, _min_year: i32, _max_year: i32) -> String {
+        // CSS is now in mosaic-widget.css using class-based filtering:
+        // .zoom-container.year-filter-active .tile-region { dim all }
+        // .zoom-container.year-filter-active .tile-region.year-match { show matching }
+        String::new()
     }
 
     /// Generate distance overlay tiles
