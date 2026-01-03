@@ -121,10 +121,28 @@ export interface UserActionResponse {
 export interface TileFolder {
   name: string;
   prefix: string;
+  children?: TileFolder[];
 }
 
 export interface TileFoldersResponse {
   folders: TileFolder[];
   prefix: string;
   count: number;
+}
+
+// Image upload types
+export interface ImageUploadResult {
+  filename: string;
+  status: 'success' | 'duplicate' | 'invalid' | 'error';
+  s3_key?: string;
+  error?: string;
+}
+
+export interface BulkUploadResponse {
+  results: ImageUploadResult[];
+  total: number;
+  successful: number;
+  duplicates: number;
+  invalid: number;
+  errors: number;
 }

@@ -21,24 +21,24 @@ def lambda_handler(event, context):
         # Extract request info
         http_method = event['httpMethod']
         tile_hash = event['pathParameters']['tileHash']
-        
+
         # Get client IP for rate limiting
         client_ip = get_client_ip(event)
-        
+
         # Parse request body
         body = {}
         if event.get('body'):
             body = json.loads(event['body'])
-        
+
         tile_path = body.get('tilePath', '')
-        
+
         # Check rate limit
         if not check_rate_limit(client_ip):
             return create_response(429, {
                 'error': 'Rate limit exceeded',
                 'message': 'Maximum 10 flags per minute'
-            })
-        
+            }, event)
+
         if http_method == 'POST':
             # Flag the tile
             result = flag_tile(tile_hash, tile_path, client_ip)
@@ -48,13 +48,13 @@ def lambda_handler(event, context):
                     'success': True,
                     'action': 'flagged',
                     'tileHash': tile_hash
-                })
+                }, event)
             else:
                 return create_response(400, {
                     'error': 'Tile already flagged',
                     'tileHash': tile_hash
-                })
-        
+                }, event)
+
         elif http_method == 'DELETE':
             # Unflag the tile
             result = unflag_tile(tile_hash)
@@ -62,14 +62,14 @@ def lambda_handler(event, context):
                 'success': True,
                 'action': 'unflagged',
                 'tileHash': tile_hash
-            })
-        
+            }, event)
+
         else:
-            return create_response(405, {'error': 'Method not allowed'})
-    
+            return create_response(405, {'error': 'Method not allowed'}, event)
+
     except Exception as e:
         print(f"Error in toggle_flag: {str(e)}")
-        return create_response(500, {'error': 'Internal server error'})
+        return create_response(500, {'error': 'Internal server error'}, event)
 
 def get_client_ip(event):
     """Extract client IP from API Gateway event"""
@@ -161,10 +161,10 @@ def unflag_tile(tile_hash):
         print(f"Error unflagging tile: {str(e)}")
         raise
 
-def create_response(status_code, body):
+def create_response(status_code, body, event=None):
     """Create API Gateway response with CORS headers"""
-    cors_origin = os.environ.get('CORS_ORIGIN', '*')
-    
+    cors_origin = get_cors_origin(event)
+
     return {
         'statusCode': status_code,
         'headers': {
@@ -175,3 +175,29 @@ def create_response(status_code, body):
         },
         'body': json.dumps(body, default=str)
     }
+
+
+def get_cors_origin(event):
+    """Get the appropriate CORS origin based on the request Origin header"""
+    # Get allowed origins from environment (comma-separated)
+    allowed_origins_str = os.environ.get('CORS_ORIGIN', '*')
+
+    # If it's a wildcard, just return it
+    if allowed_origins_str == '*':
+        return '*'
+
+    # Parse allowed origins
+    allowed_origins = [o.strip() for o in allowed_origins_str.split(',')]
+
+    # Get the request Origin header
+    if event:
+        headers = event.get('headers', {}) or {}
+        # Headers can be case-insensitive
+        request_origin = headers.get('origin') or headers.get('Origin', '')
+
+        # If the request origin is in our allowed list, return it
+        if request_origin in allowed_origins:
+            return request_origin
+
+    # Default to the first allowed origin
+    return allowed_origins[0] if allowed_origins else '*'

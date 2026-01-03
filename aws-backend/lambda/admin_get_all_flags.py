@@ -16,10 +16,11 @@ def lambda_handler(event, context):
     Admin API to retrieve all flagged tiles
     GET /admin/flags?limit=100&lastKey=...
     """
-    
-    # CORS headers
+
+    # CORS headers with dynamic origin
+    cors_origin = get_cors_origin(event)
     cors_headers = {
-        'Access-Control-Allow-Origin': os.environ.get('CORS_ORIGIN', '*'),
+        'Access-Control-Allow-Origin': cors_origin,
         'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
         'Access-Control-Allow-Methods': 'GET,OPTIONS'
     }
@@ -142,3 +143,29 @@ def lambda_handler(event, context):
                 'message': str(e)
             }, default=decimal_default)
         }
+
+
+def get_cors_origin(event):
+    """Get the appropriate CORS origin based on the request Origin header"""
+    # Get allowed origins from environment (comma-separated)
+    allowed_origins_str = os.environ.get('CORS_ORIGIN', '*')
+
+    # If it's a wildcard, just return it
+    if allowed_origins_str == '*':
+        return '*'
+
+    # Parse allowed origins
+    allowed_origins = [o.strip() for o in allowed_origins_str.split(',')]
+
+    # Get the request Origin header
+    if event:
+        headers = event.get('headers', {}) or {}
+        # Headers can be case-insensitive
+        request_origin = headers.get('origin') or headers.get('Origin', '')
+
+        # If the request origin is in our allowed list, return it
+        if request_origin in allowed_origins:
+            return request_origin
+
+    # Default to the first allowed origin
+    return allowed_origins[0] if allowed_origins else '*'

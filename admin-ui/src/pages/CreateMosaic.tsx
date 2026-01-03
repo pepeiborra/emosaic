@@ -1,23 +1,127 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { createMosaic, getUploadUrl, uploadFileToS3, submitJob, getTileCount, listTileFolders } from '../services/api';
-import type { MosaicConfig } from '../types/api';
+import type { MosaicConfig, TileFolder } from '../types/api';
 
-const TILE_SIZES = [16, 32, 64, 128, 256];
+/**
+ * Custom hook to debounce a value
+ */
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
+const BASE_TILE_SIZES = [16, 32, 48, 64, 96, 128, 192, 256];
 const DOWNSAMPLE_OPTIONS = [1, 2, 4, 8, 16, 32, 64, 256];
 const MODES = [
-  { value: 1, label: '1 (1x1, single color match)' },
-  { value: 2, label: '2 (2x2 grid matching)' },
-  { value: 3, label: '3 (3x3 grid matching)' },
-  { value: 4, label: '4 (4x4 grid matching)' },
-  { value: 5, label: '5 (5x5 grid matching)' },
-  { value: 6, label: '6 (6x6 grid matching)' },
-  { value: 8, label: '8 (8x8 grid matching)' },
-  { value: 16, label: '16 (16x16 grid matching)' },
-  { value: 32, label: '32 (32x32 grid matching, best quality)' },
-  { value: 0, label: 'Random (ignore source)' },
+  { value: 1, label: '1 (1x1, single color match)', dim: 1 },
+  { value: 2, label: '2 (2x2 grid matching)', dim: 2 },
+  { value: 3, label: '3 (3x3 grid matching)', dim: 3 },
+  { value: 4, label: '4 (4x4 grid matching)', dim: 4 },
+  { value: 5, label: '5 (5x5 grid matching)', dim: 5 },
+  { value: 6, label: '6 (6x6 grid matching)', dim: 6 },
+  { value: 8, label: '8 (8x8 grid matching)', dim: 8 },
+  { value: 16, label: '16 (16x16 grid matching)', dim: 16 },
+  { value: 32, label: '32 (32x32 grid matching, best quality)', dim: 32 },
+  { value: 0, label: 'Random (ignore source)', dim: 1 },
 ];
+
+/**
+ * Get the grid dimension for a mode value.
+ * Mode 0 (random) is treated as dim=1 for validation purposes.
+ */
+function getModeDim(mode: number): number {
+  const modeConfig = MODES.find(m => m.value === mode);
+  return modeConfig?.dim ?? 1;
+}
+
+/**
+ * Check if a tile size is valid for a given mode.
+ * Tile size must be divisible by the mode's grid dimension.
+ */
+function isTileSizeValidForMode(tileSize: number, mode: number): boolean {
+  const dim = getModeDim(mode);
+  return tileSize % dim === 0;
+}
+
+/**
+ * Get valid tile sizes for a given mode.
+ * Generates multiples of the mode's dimension, targeting reasonable sizes.
+ */
+function getValidTileSizesForMode(mode: number): number[] {
+  const dim = getModeDim(mode);
+
+  // First, filter base sizes that are valid
+  const validBaseSizes = BASE_TILE_SIZES.filter(size => size % dim === 0);
+
+  // If we have valid base sizes, use them
+  if (validBaseSizes.length > 0) {
+    return validBaseSizes;
+  }
+
+  // Otherwise, generate multiples of dim in a reasonable range (16-256)
+  // But limit to practical sizes to avoid a huge dropdown
+  const sizes: number[] = [];
+  for (let mult = 1; mult * dim <= 256; mult++) {
+    const size = mult * dim;
+    if (size >= 16) {
+      sizes.push(size);
+    }
+  }
+
+  // If too many options, filter to nice round numbers
+  if (sizes.length > 10) {
+    const filteredSizes = sizes.filter(size =>
+      size % 25 === 0 || size % 20 === 0 || size === sizes[0]
+    );
+    // Make sure we have at least a few options
+    if (filteredSizes.length >= 3) {
+      return filteredSizes;
+    }
+  }
+
+  // If still empty (dim > 256), just use dim itself and multiples
+  if (sizes.length === 0) {
+    sizes.push(dim);
+    if (dim * 2 <= 512) sizes.push(dim * 2);
+  }
+
+  return sizes;
+}
+
+/**
+ * Find the closest valid tile size for a mode.
+ */
+function findClosestValidTileSize(currentSize: number, mode: number): number {
+  const validSizes = getValidTileSizesForMode(mode);
+  if (validSizes.length === 0) return 32; // Fallback default
+
+  // Find the closest valid size
+  let closest = validSizes[0];
+  let minDiff = Math.abs(currentSize - closest);
+
+  for (const size of validSizes) {
+    const diff = Math.abs(currentSize - size);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closest = size;
+    }
+  }
+
+  return closest;
+}
 
 interface ImageDimensions {
   width: number;
@@ -127,6 +231,148 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * Get the relative path of a folder from the tiles prefix (used as exclusion key)
+ */
+function getFolderPath(folder: TileFolder, tilesPrefix: string): string {
+  // Remove the tiles prefix and trailing slash to get relative path
+  return folder.prefix.replace(tilesPrefix, '').replace(/\/$/, '');
+}
+
+/**
+ * Collect all folder paths in a tree (including nested children)
+ */
+function collectAllFolderPaths(folders: TileFolder[], tilesPrefix: string): string[] {
+  const paths: string[] = [];
+  for (const folder of folders) {
+    paths.push(getFolderPath(folder, tilesPrefix));
+    if (folder.children) {
+      paths.push(...collectAllFolderPaths(folder.children, tilesPrefix));
+    }
+  }
+  return paths;
+}
+
+interface FolderTreeNodeProps {
+  folder: TileFolder;
+  tilesPrefix: string;
+  excludedFolders: string[];
+  expandedFolders: Set<string>;
+  onToggleExclusion: (path: string, childPaths: string[]) => void;
+  onToggleExpanded: (path: string) => void;
+  depth: number;
+}
+
+function FolderTreeNode({
+  folder,
+  tilesPrefix,
+  excludedFolders,
+  expandedFolders,
+  onToggleExclusion,
+  onToggleExpanded,
+  depth,
+}: FolderTreeNodeProps) {
+  const folderPath = getFolderPath(folder, tilesPrefix);
+  const isExcluded = excludedFolders.includes(folderPath);
+  const hasChildren = folder.children && folder.children.length > 0;
+  const isExpanded = expandedFolders.has(folderPath);
+
+  // Check if any children are excluded (for partial state indication)
+  const childPaths = hasChildren ? collectAllFolderPaths(folder.children!, tilesPrefix) : [];
+  const someChildrenExcluded = childPaths.some(p => excludedFolders.includes(p));
+  const allChildrenExcluded = childPaths.length > 0 && childPaths.every(p => excludedFolders.includes(p));
+
+  return (
+    <div>
+      <div
+        className={`flex items-center py-1.5 cursor-pointer hover:bg-gray-50 ${
+          isExcluded ? 'bg-gray-50' : ''
+        }`}
+        style={{ paddingLeft: `${depth * 20 + 12}px` }}
+      >
+        {/* Expand/collapse button */}
+        {hasChildren ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpanded(folderPath);
+            }}
+            className="w-5 h-5 flex items-center justify-center text-gray-400 hover:text-gray-600 mr-1"
+          >
+            <svg
+              className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        ) : (
+          <span className="w-6 mr-1" />
+        )}
+
+        {/* Checkbox */}
+        <input
+          type="checkbox"
+          checked={!isExcluded}
+          ref={(el) => {
+            if (el) {
+              el.indeterminate = !isExcluded && someChildrenExcluded && !allChildrenExcluded;
+            }
+          }}
+          onChange={() => onToggleExclusion(folderPath, childPaths)}
+          className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+          onClick={(e) => e.stopPropagation()}
+        />
+
+        {/* Folder icon */}
+        <svg
+          className={`w-4 h-4 ml-2 ${isExcluded ? 'text-gray-300' : 'text-yellow-500'}`}
+          fill="currentColor"
+          viewBox="0 0 20 20"
+        >
+          <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+        </svg>
+
+        {/* Folder name */}
+        <span
+          className={`ml-2 text-sm ${isExcluded ? 'text-gray-400' : 'text-gray-700'}`}
+          onClick={() => onToggleExclusion(folderPath, childPaths)}
+        >
+          {folder.name}
+        </span>
+
+        {/* Child count badge */}
+        {hasChildren && (
+          <span className="ml-2 text-xs text-gray-400">
+            ({folder.children!.length})
+          </span>
+        )}
+      </div>
+
+      {/* Children */}
+      {hasChildren && isExpanded && (
+        <div>
+          {folder.children!.map((child) => (
+            <FolderTreeNode
+              key={child.prefix}
+              folder={child}
+              tilesPrefix={tilesPrefix}
+              excludedFolders={excludedFolders}
+              expandedFolders={expandedFolders}
+              onToggleExclusion={onToggleExclusion}
+              onToggleExpanded={onToggleExpanded}
+              depth={depth + 1}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CreateMosaic() {
   const navigate = useNavigate();
   const [file, setFile] = useState<File | null>(null);
@@ -145,6 +391,7 @@ export function CreateMosaic() {
     excluded_folders: [],
   });
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   // Fetch tile folders
   const { data: tileFoldersData, isLoading: foldersLoading } = useQuery({
@@ -153,12 +400,44 @@ export function CreateMosaic() {
     enabled: !!tilesDir,
   });
 
-  // Fetch tile count (with exclusions)
-  const { data: tileCountData } = useQuery({
-    queryKey: ['tileCount', tilesDir, config.excluded_folders],
-    queryFn: () => getTileCount(tilesDir, config.excluded_folders || []),
+  // Debounce excluded folders to avoid hammering the API on rapid folder selections
+  const debouncedExcludedFolders = useDebounce(config.excluded_folders, 500);
+
+  // Fetch tile count (with exclusions) - uses debounced value to reduce API calls
+  const { data: tileCountData, isFetching: tileCountFetching } = useQuery({
+    queryKey: ['tileCount', tilesDir, debouncedExcludedFolders],
+    queryFn: () => getTileCount(tilesDir, debouncedExcludedFolders || []),
     enabled: !!tilesDir,
+    // Keep previous data while refetching to prevent validation from disappearing
+    placeholderData: (previousData) => previousData,
+    // Increase stale time to reduce unnecessary refetches
+    staleTime: 30000, // Consider data fresh for 30 seconds
+    // Allow longer time for the query to complete (S3 listing can be slow)
+    retry: 1, // Only retry once on failure
   });
+
+  // Get valid tile sizes for the current mode
+  const validTileSizes = useMemo(() => getValidTileSizesForMode(config.mode), [config.mode]);
+
+  // Auto-adjust tile size when mode changes and current tile size is invalid
+  useEffect(() => {
+    if (!isTileSizeValidForMode(config.tile_size, config.mode)) {
+      const newTileSize = findClosestValidTileSize(config.tile_size, config.mode);
+      setConfig(prev => ({ ...prev, tile_size: newTileSize }));
+    }
+  }, [config.mode, config.tile_size]);
+
+  // Tile size validation
+  const tileSizeValidation = useMemo(() => {
+    const dim = getModeDim(config.mode);
+    if (!isTileSizeValidForMode(config.tile_size, config.mode)) {
+      return {
+        isValid: false,
+        message: `Tile size ${config.tile_size} is not divisible by ${dim} (required for mode ${config.mode}). Valid sizes: ${validTileSizes.join(', ')}`,
+      };
+    }
+    return { isValid: true, message: null };
+  }, [config.tile_size, config.mode, validTileSizes]);
 
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -262,15 +541,40 @@ export function CreateMosaic() {
     return { isValid: true, message: null };
   }, [config.no_repeat, mosaicStats, tileCountData]);
 
-  // Toggle folder exclusion
-  const toggleFolderExclusion = useCallback((folderName: string) => {
+  // Toggle folder exclusion (including all children)
+  const toggleFolderExclusion = useCallback((folderPath: string, childPaths: string[]) => {
     setConfig(prev => {
       const excluded = prev.excluded_folders || [];
-      if (excluded.includes(folderName)) {
-        return { ...prev, excluded_folders: excluded.filter(f => f !== folderName) };
+      const isCurrentlyExcluded = excluded.includes(folderPath);
+
+      if (isCurrentlyExcluded) {
+        // Including folder: remove it and all children from exclusion list
+        const pathsToRemove = new Set([folderPath, ...childPaths]);
+        return { ...prev, excluded_folders: excluded.filter(f => !pathsToRemove.has(f)) };
       } else {
-        return { ...prev, excluded_folders: [...excluded, folderName] };
+        // Excluding folder: add it and all children to exclusion list
+        const pathsToAdd = [folderPath, ...childPaths];
+        const newExcluded = [...excluded];
+        for (const path of pathsToAdd) {
+          if (!newExcluded.includes(path)) {
+            newExcluded.push(path);
+          }
+        }
+        return { ...prev, excluded_folders: newExcluded };
       }
+    });
+  }, []);
+
+  // Toggle folder expanded state
+  const toggleFolderExpanded = useCallback((folderPath: string) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(folderPath)) {
+        next.delete(folderPath);
+      } else {
+        next.add(folderPath);
+      }
+      return next;
     });
   }, []);
 
@@ -382,7 +686,7 @@ export function CreateMosaic() {
             onChange={(e) => setConfig({ ...config, tile_size: Number(e.target.value) })}
             className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2 border"
           >
-            {TILE_SIZES.map((size) => (
+            {validTileSizes.map((size) => (
               <option key={size} value={size}>
                 {size}px
               </option>
@@ -390,6 +694,9 @@ export function CreateMosaic() {
           </select>
           <p className="mt-1 text-xs text-gray-500">
             Smaller tiles = more detail but larger output
+            {config.mode > 1 && (
+              <span className="text-gray-400"> (must be divisible by {getModeDim(config.mode)} for mode {config.mode})</span>
+            )}
           </p>
         </div>
 
@@ -502,30 +809,19 @@ export function CreateMosaic() {
             </div>
           ) : tileFoldersData && tileFoldersData.folders.length > 0 ? (
             <div className="border border-gray-200 rounded-lg overflow-hidden">
-              <div className="max-h-48 overflow-y-auto">
-                {tileFoldersData.folders.map((folder) => {
-                  const isExcluded = config.excluded_folders?.includes(folder.name) || false;
-                  return (
-                    <div
-                      key={folder.name}
-                      className={`flex items-center px-3 py-2 border-b border-gray-100 last:border-b-0 cursor-pointer hover:bg-gray-50 ${
-                        isExcluded ? 'bg-gray-50' : ''
-                      }`}
-                      onClick={() => toggleFolderExclusion(folder.name)}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={!isExcluded}
-                        onChange={() => toggleFolderExclusion(folder.name)}
-                        className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                      <span className={`ml-2 text-sm ${isExcluded ? 'text-gray-400' : 'text-gray-700'}`}>
-                        {folder.name}
-                      </span>
-                    </div>
-                  );
-                })}
+              <div className="max-h-64 overflow-y-auto">
+                {tileFoldersData.folders.map((folder) => (
+                  <FolderTreeNode
+                    key={folder.prefix}
+                    folder={folder}
+                    tilesPrefix={tilesDir}
+                    excludedFolders={config.excluded_folders || []}
+                    expandedFolders={expandedFolders}
+                    onToggleExclusion={toggleFolderExclusion}
+                    onToggleExpanded={toggleFolderExpanded}
+                    depth={0}
+                  />
+                ))}
               </div>
             </div>
           ) : (
@@ -584,9 +880,29 @@ export function CreateMosaic() {
                   <p className="text-gray-500">Available Tiles</p>
                   <p className="font-medium text-gray-900">
                     {formatNumber(tileCountData.count)}
+                    {tileCountFetching && (
+                      <span className="ml-2 text-xs text-gray-400">(updating...)</span>
+                    )}
                   </p>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Tile Size Validation Warning */}
+        {!tileSizeValidation.isValid && (
+          <div className="rounded-md bg-yellow-50 border border-yellow-200 p-4">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-yellow-800">Invalid tile size for selected mode</h3>
+                <p className="mt-1 text-sm text-yellow-700">{tileSizeValidation.message}</p>
+              </div>
             </div>
           </div>
         )}
@@ -640,7 +956,7 @@ export function CreateMosaic() {
           </button>
           <button
             type="submit"
-            disabled={!file || createMutation.isPending || !noRepeatValidation.isValid}
+            disabled={!file || createMutation.isPending || !noRepeatValidation.isValid || !tileSizeValidation.isValid}
             className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {createMutation.isPending ? 'Creating...' : 'Create Mosaic'}

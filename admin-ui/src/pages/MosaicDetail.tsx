@@ -468,6 +468,23 @@ export function MosaicDetail() {
               <dd className="text-sm text-gray-900">{mosaic.config.randomize}%</dd>
             </div>
           )}
+          {mosaic.config.excluded_folders && mosaic.config.excluded_folders.length > 0 && (
+            <div className="sm:col-span-2">
+              <dt className="text-sm font-medium text-gray-500">Excluded Folders</dt>
+              <dd className="text-sm text-gray-900 mt-1">
+                <div className="flex flex-wrap gap-1">
+                  {mosaic.config.excluded_folders.map((folder) => (
+                    <span
+                      key={folder}
+                      className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700"
+                    >
+                      {folder}
+                    </span>
+                  ))}
+                </div>
+              </dd>
+            </div>
+          )}
         </dl>
       </div>
 

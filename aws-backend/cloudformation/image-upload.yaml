@@ -1,0 +1,402 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Emosaic Image Upload - Bulk image upload with duplicate detection'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'prod'
+    Description: Environment name
+
+  CorsOrigin:
+    Type: String
+    Default: 'https://casadelmanco.com'
+    Description: CORS origin for API Gateway
+
+Resources:
+  #############################################################################
+  # DynamoDB Table for Image Hashes (duplicate detection)
+  #############################################################################
+
+  ImagesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${Environment}-images'
+      AttributeDefinitions:
+        - AttributeName: image_hash
+          AttributeType: S
+        - AttributeName: uploaded_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: image_hash
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: by-uploaded-at
+          KeySchema:
+            - AttributeName: image_hash
+              KeyType: HASH
+            - AttributeName: uploaded_at
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: Emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
+  #############################################################################
+  # IAM Policy for Images Table access (adds to existing role)
+  #############################################################################
+
+  ImagesTablePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub '${Environment}-images-table-access'
+      Roles:
+        - !Sub '${Environment}-mosaic-lambda-role'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:BatchGetItem
+              - dynamodb:BatchWriteItem
+            Resource:
+              - !GetAtt ImagesTable.Arn
+              - !Sub '${ImagesTable.Arn}/index/*'
+
+  #############################################################################
+  # Lambda Functions for Image Upload
+  #############################################################################
+
+  # Main image upload handler (routes to appropriate handler)
+  ImageUploadFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-image-upload'
+      Runtime: python3.11
+      Handler: image_upload.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: '${Environment}-mosaic-lambda-role-arn'
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': json.dumps({'message': 'Placeholder'})}
+      Environment:
+        Variables:
+          TILES_BUCKET: !ImportValue
+            Fn::Sub: '${Environment}-emosaic-tiles-bucket'
+          IMAGES_TABLE: !Ref ImagesTable
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 60
+      MemorySize: 256
+
+  #############################################################################
+  # API Gateway Resources
+  #############################################################################
+
+  # /images
+  ImagesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !GetAtt APIRootResource.ResourceId
+      PathPart: 'images'
+
+  # Helper to get root resource
+  APIRootResource:
+    Type: Custom::GetRootResource
+    Properties:
+      ServiceToken: !GetAtt GetRootResourceFunction.Arn
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  GetRootResourceFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-get-root-resource-images'
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt GetRootResourceRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+
+          def handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  api_id = event['ResourceProperties']['RestApiId']
+                  client = boto3.client('apigateway')
+                  response = client.get_resources(restApiId=api_id, limit=500)
+
+                  root_id = None
+                  for item in response['items']:
+                      if item['path'] == '/':
+                          root_id = item['id']
+                          break
+
+                  if root_id:
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS,
+                                     {'ResourceId': root_id}, root_id)
+                  else:
+                      cfnresponse.send(event, context, cfnresponse.FAILED,
+                                     {'Error': 'Root resource not found'})
+              except Exception as e:
+                  cfnresponse.send(event, context, cfnresponse.FAILED,
+                                 {'Error': str(e)})
+      Timeout: 30
+
+  GetRootResourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: APIGatewayAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                Resource: '*'
+
+  # /images/upload-urls
+  ImagesUploadUrlsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !Ref ImagesResource
+      PathPart: 'upload-urls'
+
+  # /images/check-duplicates
+  ImagesCheckDuplicatesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !Ref ImagesResource
+      PathPart: 'check-duplicates'
+
+  # /images/confirm
+  ImagesConfirmResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !Ref ImagesResource
+      PathPart: 'confirm'
+
+  #############################################################################
+  # CORS OPTIONS Methods
+  #############################################################################
+
+  ImagesUploadUrlsOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ImagesUploadUrlsResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ImagesCheckDuplicatesOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ImagesCheckDuplicatesResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ImagesConfirmOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ImagesConfirmResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  #############################################################################
+  # API Methods
+  #############################################################################
+
+  # POST /images/upload-urls
+  ImagesUploadUrlsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ImagesUploadUrlsResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt ImageUploadFunction.Arn
+
+  # POST /images/check-duplicates
+  ImagesCheckDuplicatesMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ImagesCheckDuplicatesResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt ImageUploadFunction.Arn
+
+  # POST /images/confirm
+  ImagesConfirmMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ImagesConfirmResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt ImageUploadFunction.Arn
+
+  #############################################################################
+  # Lambda Permissions
+  #############################################################################
+
+  ImageUploadPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ImageUploadFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  #############################################################################
+  # API Deployment
+  #############################################################################
+
+  ImageUploadAPIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ImagesUploadUrlsMethod
+      - ImagesUploadUrlsOptionsMethod
+      - ImagesCheckDuplicatesMethod
+      - ImagesCheckDuplicatesOptionsMethod
+      - ImagesConfirmMethod
+      - ImagesConfirmOptionsMethod
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      StageName: !Ref Environment
+
+Outputs:
+  ImagesTableName:
+    Description: Name of the images DynamoDB table
+    Value: !Ref ImagesTable
+    Export:
+      Name: !Sub '${Environment}-images-table'
+
+  ImagesTableArn:
+    Description: ARN of the images DynamoDB table
+    Value: !GetAtt ImagesTable.Arn
+    Export:
+      Name: !Sub '${Environment}-images-table-arn'
+
+  ImageUploadFunctionName:
+    Description: Name of the image upload function
+    Value: !Ref ImageUploadFunction
+
+  ImageUploadFunctionArn:
+    Description: ARN of the image upload function
+    Value: !GetAtt ImageUploadFunction.Arn

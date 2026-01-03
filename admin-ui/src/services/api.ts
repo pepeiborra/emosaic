@@ -8,6 +8,8 @@ import type {
   UserListResponse,
   UserActionResponse,
   TileFoldersResponse,
+  ImageUploadResult,
+  BulkUploadResponse,
 } from '../types/api';
 
 // In development, use /api which is proxied by Vite
@@ -183,3 +185,159 @@ export async function enableUser(username: string): Promise<UserActionResponse> 
 export async function disableUser(username: string): Promise<UserActionResponse> {
   return apiRequest(`/users/${encodeURIComponent(username)}/disable`, { method: 'PUT' });
 }
+
+// Image upload endpoints
+export async function getBulkUploadUrls(
+  files: Array<{ filename: string; content_type: string }>,
+  year: string,
+  email: string
+): Promise<{
+  uploads: Array<{ filename: string; upload_url: string; s3_key: string }>;
+}> {
+  return apiRequest('/images/upload-urls', {
+    method: 'POST',
+    body: JSON.stringify({ files, year, email }),
+  });
+}
+
+export async function checkDuplicates(
+  hashes: string[]
+): Promise<{ duplicates: string[] }> {
+  return apiRequest('/images/check-duplicates', {
+    method: 'POST',
+    body: JSON.stringify({ hashes }),
+  });
+}
+
+export async function confirmUploads(
+  uploads: Array<{ s3_key: string; hash: string; filename: string }>
+): Promise<BulkUploadResponse> {
+  return apiRequest('/images/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ uploads }),
+  });
+}
+
+// Helper function to compute hash of a file
+async function computeFileHash(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Main upload function that handles the full flow
+export async function uploadImages(
+  files: File[],
+  year: string,
+  email: string
+): Promise<ImageUploadResult[]> {
+  const results: ImageUploadResult[] = [];
+
+  // Step 1: Compute hashes for all files
+  const fileHashes = await Promise.all(
+    files.map(async (file) => ({
+      file,
+      hash: await computeFileHash(file),
+      filename: file.name,
+      content_type: file.type,
+    }))
+  );
+
+  // Step 2: Check for duplicates
+  const { duplicates } = await checkDuplicates(fileHashes.map((f) => f.hash));
+  const duplicateSet = new Set(duplicates);
+
+  // Mark duplicates
+  const nonDuplicates = fileHashes.filter((f) => {
+    if (duplicateSet.has(f.hash)) {
+      results.push({
+        filename: f.filename,
+        status: 'duplicate',
+      });
+      return false;
+    }
+    return true;
+  });
+
+  if (nonDuplicates.length === 0) {
+    return results;
+  }
+
+  // Step 3: Get presigned URLs for non-duplicate files
+  const { uploads } = await getBulkUploadUrls(
+    nonDuplicates.map((f) => ({
+      filename: f.filename,
+      content_type: f.content_type,
+    })),
+    year,
+    email
+  );
+
+  // Step 4: Upload files to S3
+  const uploadPromises = nonDuplicates.map(async (fileInfo, index) => {
+    const upload = uploads[index];
+    try {
+      const response = await fetch(upload.upload_url, {
+        method: 'PUT',
+        body: fileInfo.file,
+        headers: {
+          'Content-Type': fileInfo.content_type,
+        },
+      });
+
+      if (!response.ok) {
+        return {
+          filename: fileInfo.filename,
+          status: 'error' as const,
+          error: `Upload failed: ${response.status}`,
+        };
+      }
+
+      return {
+        filename: fileInfo.filename,
+        status: 'success' as const,
+        s3_key: upload.s3_key,
+        hash: fileInfo.hash,
+      };
+    } catch (error) {
+      return {
+        filename: fileInfo.filename,
+        status: 'error' as const,
+        error: error instanceof Error ? error.message : 'Upload failed',
+      };
+    }
+  });
+
+  const uploadResults = await Promise.all(uploadPromises);
+
+  // Step 5: Confirm successful uploads
+  const successfulUploads = uploadResults.filter(
+    (r): r is { filename: string; status: 'success'; s3_key: string; hash: string } =>
+      r.status === 'success' && !!r.s3_key && !!r.hash
+  );
+
+  if (successfulUploads.length > 0) {
+    await confirmUploads(
+      successfulUploads.map((u) => ({
+        s3_key: u.s3_key,
+        hash: u.hash,
+        filename: u.filename,
+      }))
+    );
+  }
+
+  // Combine all results
+  results.push(
+    ...uploadResults.map((r) => ({
+      filename: r.filename,
+      status: r.status,
+      s3_key: r.s3_key,
+      error: r.status === 'error' ? r.error : undefined,
+    }))
+  );
+
+  return results;
+}
+
+export type { ImageUploadResult };

@@ -45,11 +45,12 @@ STACK_BATCH="${ENVIRONMENT}-batch-infrastructure"
 STACK_MOSAIC_API="${ENVIRONMENT}-mosaic-api"
 STACK_PHASE3="${ENVIRONMENT}-phase3-enhancements"
 STACK_USER_MGMT="${ENVIRONMENT}-user-management"
+STACK_IMAGE_UPLOAD="${ENVIRONMENT}-image-upload"
 STACK_CERTIFICATE="${ENVIRONMENT}-domain-certificate"
 STACK_ADMIN_UI="${ENVIRONMENT}-admin-ui"
 
 # Stacks in reverse dependency order (for deletion) - main region
-ALL_STACKS="$STACK_ADMIN_UI $STACK_USER_MGMT $STACK_PHASE3 $STACK_MOSAIC_API $STACK_BATCH $STACK_JOB_HANDLER $STACK_MOSAIC_INFRA $STACK_TILE_FLAGS"
+ALL_STACKS="$STACK_ADMIN_UI $STACK_IMAGE_UPLOAD $STACK_USER_MGMT $STACK_PHASE3 $STACK_MOSAIC_API $STACK_BATCH $STACK_JOB_HANDLER $STACK_MOSAIC_INFRA $STACK_TILE_FLAGS"
 
 # =============================================================================
 # Clean existing stacks if requested
@@ -349,6 +350,7 @@ zip -q -r ../../delete_mosaic.zip delete_mosaic.py
 zip -q -r ../../submit_job.zip submit_job.py
 zip -q -r ../../get_job.zip get_job.py
 zip -q -r ../../get_tile_count.zip get_tile_count.py
+zip -q -r ../../list_tile_folders.zip list_tile_folders.py
 
 cd ../..
 
@@ -380,6 +382,7 @@ DELETE_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --
 SUBMIT_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='SubmitJobFunctionName'].OutputValue" --output text --region $REGION)
 GETJOB_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='GetJobFunctionName'].OutputValue" --output text --region $REGION)
 GET_TILE_COUNT_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='GetTileCountFunctionName'].OutputValue" --output text --region $REGION)
+LIST_TILE_FOLDERS_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='ListTileFoldersFunctionName'].OutputValue" --output text --region $REGION)
 
 aws lambda update-function-code --function-name $LIST_FN --zip-file fileb://list_mosaics.zip --region $REGION > /dev/null
 aws lambda update-function-code --function-name $GET_FN --zip-file fileb://get_mosaic.zip --region $REGION > /dev/null
@@ -389,8 +392,9 @@ aws lambda update-function-code --function-name $DELETE_FN --zip-file fileb://de
 aws lambda update-function-code --function-name $SUBMIT_FN --zip-file fileb://submit_job.zip --region $REGION > /dev/null
 aws lambda update-function-code --function-name $GETJOB_FN --zip-file fileb://get_job.zip --region $REGION > /dev/null
 aws lambda update-function-code --function-name $GET_TILE_COUNT_FN --zip-file fileb://get_tile_count.zip --region $REGION > /dev/null
+aws lambda update-function-code --function-name $LIST_TILE_FOLDERS_FN --zip-file fileb://list_tile_folders.zip --region $REGION > /dev/null
 
-rm -f list_mosaics.zip get_mosaic.zip create_mosaic.zip update_mosaic.zip delete_mosaic.zip submit_job.zip get_job.zip get_tile_count.zip
+rm -f list_mosaics.zip get_mosaic.zip create_mosaic.zip update_mosaic.zip delete_mosaic.zip submit_job.zip get_job.zip get_tile_count.zip list_tile_folders.zip
 
 echo ""
 echo "====================================================================="
@@ -477,6 +481,43 @@ USER_MGMT_FN=$(aws cloudformation describe-stacks --stack-name $STACK_USER_MGMT 
 aws lambda update-function-code --function-name $USER_MGMT_FN --zip-file fileb://user_management.zip --region $REGION > /dev/null
 
 rm -f user_management.zip
+
+echo ""
+echo "====================================================================="
+echo "Phase 6.6: Deploying Image Upload API"
+echo "====================================================================="
+echo ""
+
+# Package image upload Lambda
+echo "📦 Packaging image upload Lambda..."
+cd lambda/mosaic
+zip -q -r ../../image_upload.zip image_upload.py
+cd ../..
+
+# Deploy image upload stack
+echo "🏗️  Deploying image upload stack..."
+aws cloudformation deploy \
+    --template-file cloudformation/image-upload.yaml \
+    --stack-name $STACK_IMAGE_UPLOAD \
+    --parameter-overrides \
+        Environment=$ENVIRONMENT \
+        CorsOrigin="$CORS_ORIGIN" \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --region $REGION
+
+if [ $? -eq 0 ]; then
+    echo "✅ Image upload deployed"
+else
+    echo "❌ Image upload deployment failed"
+    exit 1
+fi
+
+# Update image upload Lambda code
+echo "📤 Updating image upload Lambda code..."
+IMAGE_UPLOAD_FN=$(aws cloudformation describe-stacks --stack-name $STACK_IMAGE_UPLOAD --query "Stacks[0].Outputs[?OutputKey=='ImageUploadFunctionName'].OutputValue" --output text --region $REGION)
+aws lambda update-function-code --function-name $IMAGE_UPLOAD_FN --zip-file fileb://image_upload.zip --region $REGION > /dev/null
+
+rm -f image_upload.zip
 
 echo ""
 echo "====================================================================="
@@ -581,15 +622,15 @@ else
     fi
 
     # Write to temp file and apply
-    echo "$UPDATED_POLICY" > /tmp/tiles-bucket-policy.json
-    if aws s3api put-bucket-policy --bucket $EXISTING_TILES_BUCKET --policy file:///tmp/tiles-bucket-policy.json; then
+    echo "$UPDATED_POLICY" > /tmp/tiles-bucket-policy-${ENVIRONMENT}.json
+    if aws s3api put-bucket-policy --bucket $EXISTING_TILES_BUCKET --policy file:///tmp/tiles-bucket-policy-${ENVIRONMENT}.json; then
         echo "   ✅ Tiles bucket policy updated for CloudFront access"
     else
         echo "   ⚠️  Failed to update tiles bucket policy. You may need to add it manually."
         echo "   Policy statement needed:"
         echo "$NEW_STATEMENT" | jq .
     fi
-    rm -f /tmp/tiles-bucket-policy.json
+    rm -f /tmp/tiles-bucket-policy-${ENVIRONMENT}.json
 fi
 
 # Only add /admin/* route to main CloudFront for prod (when no custom domain)
@@ -652,12 +693,12 @@ FUNCEOF
     echo "Admin S3 website domain: $ADMIN_WEBSITE_DOMAIN"
 
     # Get current distribution config
-    aws cloudfront get-distribution-config --id $MAIN_DISTRIBUTION_ID > /tmp/cf-config.json
-    ETAG=$(jq -r '.ETag' /tmp/cf-config.json)
-    jq '.DistributionConfig' /tmp/cf-config.json > /tmp/cf-dist-config.json
+    aws cloudfront get-distribution-config --id $MAIN_DISTRIBUTION_ID > /tmp/cf-config-${ENVIRONMENT}.json
+    ETAG=$(jq -r '.ETag' /tmp/cf-config-${ENVIRONMENT}.json)
+    jq '.DistributionConfig' /tmp/cf-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-${ENVIRONMENT}.json
 
     # Check current origin domain
-    CURRENT_ORIGIN_DOMAIN=$(jq -r '.Origins.Items[] | select(.Id == "AdminUIOrigin") | .DomainName' /tmp/cf-dist-config.json 2>/dev/null || echo "")
+    CURRENT_ORIGIN_DOMAIN=$(jq -r '.Origins.Items[] | select(.Id == "AdminUIOrigin") | .DomainName' /tmp/cf-dist-config-${ENVIRONMENT}.json 2>/dev/null || echo "")
 
     if [ -n "$CURRENT_ORIGIN_DOMAIN" ] && [ "$CURRENT_ORIGIN_DOMAIN" != "$ADMIN_WEBSITE_DOMAIN" ]; then
         echo "   Updating AdminUIOrigin domain from $CURRENT_ORIGIN_DOMAIN to $ADMIN_WEBSITE_DOMAIN..."
@@ -665,11 +706,11 @@ FUNCEOF
         # Update the origin domain
         jq --arg domain "$ADMIN_WEBSITE_DOMAIN" '
           .Origins.Items = [.Origins.Items[] | if .Id == "AdminUIOrigin" then .DomainName = $domain else . end]
-        ' /tmp/cf-dist-config.json > /tmp/cf-dist-config-final.json
+        ' /tmp/cf-dist-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-final-${ENVIRONMENT}.json
 
         aws cloudfront update-distribution \
             --id $MAIN_DISTRIBUTION_ID \
-            --distribution-config file:///tmp/cf-dist-config-final.json \
+            --distribution-config file:///tmp/cf-dist-config-final-${ENVIRONMENT}.json \
             --if-match $ETAG > /dev/null
         echo "   ✅ AdminUIOrigin domain updated"
 
@@ -702,7 +743,7 @@ FUNCEOF
             "OriginShield": {"Enabled": false}
           }] |
           .Origins.Quantity = (.Origins.Items | length)
-        ' /tmp/cf-dist-config.json > /tmp/cf-dist-config-with-origin.json
+        ' /tmp/cf-dist-config-${ENVIRONMENT}.json > /tmp/cf-dist-config-with-origin-${ENVIRONMENT}.json
 
         # Add the cache behavior for /admin/*
         jq '
@@ -723,11 +764,11 @@ FUNCEOF
             "LambdaFunctionAssociations": {"Quantity": 0, "Items": []}
           }] + .CacheBehaviors.Items |
           .CacheBehaviors.Quantity = (.CacheBehaviors.Items | length)
-        ' /tmp/cf-dist-config-with-origin.json > /tmp/cf-dist-config-final.json
+        ' /tmp/cf-dist-config-with-origin-${ENVIRONMENT}.json > /tmp/cf-dist-config-final-${ENVIRONMENT}.json
 
         aws cloudfront update-distribution \
             --id $MAIN_DISTRIBUTION_ID \
-            --distribution-config file:///tmp/cf-dist-config-final.json \
+            --distribution-config file:///tmp/cf-dist-config-final-${ENVIRONMENT}.json \
             --if-match $ETAG > /dev/null
         echo "   ✅ AdminUIOrigin and /admin/* route added to CloudFront"
 
@@ -779,10 +820,32 @@ FUNCEOF
         echo "   /admin redirect behavior already exists."
     fi
 
-    rm -f /tmp/cf-config.json /tmp/cf-dist-config.json /tmp/cf-dist-config-with-origin.json /tmp/cf-dist-config-final.json
+    rm -f /tmp/cf-config-${ENVIRONMENT}.json /tmp/cf-dist-config-${ENVIRONMENT}.json /tmp/cf-dist-config-with-origin-${ENVIRONMENT}.json /tmp/cf-dist-config-final-${ENVIRONMENT}.json
 else
     echo ""
     echo "Custom domain configured ($CUSTOM_DOMAIN) - admin UI will be served by its own CloudFront distribution"
+fi
+
+echo ""
+echo "====================================================================="
+echo "Phase 9: Redeploy API Gateway"
+echo "====================================================================="
+echo ""
+
+# API Gateway deployment happens in CloudFormation before Lambda code is uploaded,
+# so we need to trigger a new deployment to pick up the updated Lambda code
+echo "🔄 Creating new API Gateway deployment..."
+API_ID=$(aws cloudformation describe-stacks --stack-name $STACK_TILE_FLAGS --query "Stacks[0].Outputs[?OutputKey=='APIGatewayId'].OutputValue" --output text --region $REGION)
+
+if [ -n "$API_ID" ] && [ "$API_ID" != "None" ]; then
+    aws apigateway create-deployment \
+        --rest-api-id "$API_ID" \
+        --stage-name "$ENVIRONMENT" \
+        --description "Deployment after Lambda code update" \
+        --region $REGION > /dev/null
+    echo "✅ API Gateway redeployed"
+else
+    echo "⚠️  Could not find API Gateway ID, skipping redeployment"
 fi
 
 echo ""
@@ -839,8 +902,14 @@ echo ""
 echo "  File Upload (require Cognito auth):"
 echo "    POST   $API_URL/upload-url                - Get presigned URL for S3 upload"
 echo ""
+echo "  Image Upload (require Cognito auth):"
+echo "    POST   $API_URL/images/upload-urls        - Get presigned URLs for bulk image upload"
+echo "    POST   $API_URL/images/check-duplicates   - Check for duplicate images by hash"
+echo "    POST   $API_URL/images/confirm            - Confirm successful uploads"
+echo ""
 echo "  Tiles (require Cognito auth):"
 echo "    GET    $API_URL/tiles/count               - Get tile count for validation"
+echo "    GET    $API_URL/tiles/folders             - List tile folders"
 echo ""
 echo "  User Management (require Cognito auth):"
 echo "    GET    $API_URL/users                     - List all users"

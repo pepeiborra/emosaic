@@ -192,8 +192,18 @@ Resources:
       AdminCreateUserConfig:
         AllowAdminCreateUserOnly: true
         InviteMessageTemplate:
-          EmailMessage: 'You have been invited to the Emosaic Admin Panel. Your username is {username} and your temporary password is: {####}. Please log in at https://casadelmanco.com/admin and change your password.'
-          EmailSubject: 'Emosaic Admin Invitation'
+          EmailMessage: 'Has sido invitado/a al Panel de Administración de Casa del Manco. Tu nombre de usuario es {username} y tu contraseña temporal es: {####}. Por favor, inicia sesión en https://casadelmanco.com/admin y cambia tu contraseña.'
+          EmailSubject: 'Invitación al Panel de Administración - Casa del Manco'
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailMessage: 'Tu código de verificación para Casa del Manco es: {####}'
+        EmailSubject: 'Código de verificación - Casa del Manco'
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
       Policies:
         PasswordPolicy:
           MinimumLength: 12

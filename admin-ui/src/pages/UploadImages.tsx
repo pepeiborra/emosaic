@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useAuth } from '../hooks/useAuth';
-import { uploadImages, type ImageUploadResult } from '../services/api';
+import { uploadImages } from '../services/api';
 
 interface FileWithPreview {
   file: File;
@@ -340,10 +340,9 @@ export function UploadImages() {
             </div>
           </div>
 
-          {/* Upload destination info */}
           <div className="mb-4 p-3 bg-gray-50 rounded-lg">
             <p className="text-sm text-gray-600">
-              Images will be uploaded to: <code className="bg-gray-200 px-1 rounded">{year}/{user?.email}/</code>
+              Images will be uploaded to: <code className="bg-gray-200 px-1 rounded">tiles/{year}/{user?.email}/</code>
             </p>
           </div>
 

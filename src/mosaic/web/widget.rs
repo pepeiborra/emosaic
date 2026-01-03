@@ -328,7 +328,7 @@ where
                             .to_string()
                     };
 
-                let web_path = format!("tiles/{}", relative_to_tiles_dir);
+                let web_path = format!("/tiles/{}", relative_to_tiles_dir);
                 (web_path.clone(), web_path, "true")
             } else {
                 // For local files, use file:// URLs
