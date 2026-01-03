@@ -403,6 +403,83 @@ rm -f set_main_mosaic.zip list_jobs.zip get_upload_url.zip cancel_job.zip
 
 echo ""
 echo "====================================================================="
+echo "Phase 7: Deploying Domain Certificate (if custom domain configured)"
+echo "====================================================================="
+echo ""
+
+CERTIFICATE_ARN=""
+if [ -n "$CUSTOM_DOMAIN" ]; then
+    # Validate required parameters
+    if [ -z "$HOSTED_ZONE_ID" ]; then
+        echo "⚠️  HOSTED_ZONE_ID is required for custom domain setup."
+        echo "   You can find it with: aws route53 list-hosted-zones"
+        read -p "Enter Route 53 Hosted Zone ID for $ROOT_DOMAIN: " HOSTED_ZONE_ID
+        if [ -z "$HOSTED_ZONE_ID" ]; then
+            echo "❌ Hosted Zone ID is required for custom domain"
+            exit 1
+        fi
+    fi
+
+    # Deploy certificate in us-east-1 (required for CloudFront)
+    echo "🏗️  Deploying SSL certificate in us-east-1..."
+    aws cloudformation deploy \
+        --template-file cloudformation/domain-certificate.yaml \
+        --stack-name $STACK_CERTIFICATE \
+        --parameter-overrides \
+            Environment=$ENVIRONMENT \
+            RootDomain="$ROOT_DOMAIN" \
+            HostedZoneId="$HOSTED_ZONE_ID" \
+        --region us-east-1
+
+    if [ $? -eq 0 ]; then
+        echo "✅ Certificate deployed"
+    else
+        echo "❌ Certificate deployment failed"
+        exit 1
+    fi
+
+    # Get certificate ARN
+    CERTIFICATE_ARN=$(aws cloudformation describe-stacks --stack-name $STACK_CERTIFICATE --query "Stacks[0].Outputs[?OutputKey=='CertificateArn'].OutputValue" --output text --region us-east-1)
+    echo "   Certificate ARN: $CERTIFICATE_ARN"
+else
+    echo "⏭️  Skipping certificate deployment (no CUSTOM_DOMAIN set)"
+fi
+
+echo ""
+echo "====================================================================="
+echo "Phase 8: Deploying Admin UI"
+echo "====================================================================="
+echo ""
+
+echo "🏗️  Deploying Admin UI stack..."
+if [ -n "$CUSTOM_DOMAIN" ] && [ -n "$CERTIFICATE_ARN" ]; then
+    aws cloudformation deploy \
+        --template-file cloudformation/admin-ui-infrastructure.yaml \
+        --stack-name $STACK_ADMIN_UI \
+        --parameter-overrides \
+            Environment=$ENVIRONMENT \
+            CustomDomain="$CUSTOM_DOMAIN" \
+            CertificateArn="$CERTIFICATE_ARN" \
+            HostedZoneId="$HOSTED_ZONE_ID" \
+        --region $REGION
+else
+    aws cloudformation deploy \
+        --template-file cloudformation/admin-ui-infrastructure.yaml \
+        --stack-name $STACK_ADMIN_UI \
+        --parameter-overrides \
+            Environment=$ENVIRONMENT \
+        --region $REGION
+fi
+
+if [ $? -eq 0 ]; then
+    echo "✅ Admin UI deployed"
+else
+    echo "❌ Admin UI deployment failed"
+    exit 1
+fi
+
+    echo ""
+echo "====================================================================="
 echo "📋 Deployment Summary"
 echo "====================================================================="
 echo ""
@@ -418,10 +495,17 @@ if [ "$SKIP_BATCH" = "false" ]; then
     JOB_QUEUE=$(aws cloudformation describe-stacks --stack-name $STACK_BATCH --query "Stacks[0].Outputs[?OutputKey=='BatchJobQueueName'].OutputValue" --output text --region $REGION)
 fi
 
+# Get Admin UI URL
+ADMIN_UI_URL=$(aws cloudformation describe-stacks --stack-name $STACK_ADMIN_UI --query "Stacks[0].Outputs[?OutputKey=='CloudFrontURL'].OutputValue" --output text --region $REGION)
+if [ -n "$CUSTOM_DOMAIN" ]; then
+    ADMIN_UI_URL="https://$CUSTOM_DOMAIN"
+fi
+
 echo "🎯 API Gateway URL: $API_URL"
 echo "🪣 S3 Tiles Bucket: $TILES_BUCKET"
 echo "👤 Cognito User Pool ID: $USER_POOL_ID"
 echo "🔑 Cognito Client ID: $USER_POOL_CLIENT_ID"
+echo "🌐 Admin UI URL: $ADMIN_UI_URL"
 if [ "$SKIP_BATCH" = "false" ]; then
     echo "🐳 ECR Repository: $ECR_URI"
     echo "⚙️  Batch Job Queue: $JOB_QUEUE"

@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ACM Certificate for Emosaic environment subdomain (must be deployed in us-east-1)'
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (used as subdomain prefix)
+    Default: 'rc'
+
+  RootDomain:
+    Type: String
+    Description: Root domain name
+    Default: 'casadelmanco.com'
+
+  HostedZoneId:
+    Type: String
+    Description: Route 53 Hosted Zone ID for the root domain
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub '${Environment}.${RootDomain}'
+      SubjectAlternativeNames:
+        - !Sub '${Environment}.${RootDomain}'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub '${Environment}.${RootDomain}'
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Project
+          Value: emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  CertificateArn:
+    Description: ARN of the ACM certificate
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub '${Environment}-emosaic-certificate-arn'
+
+  DomainName:
+    Description: Full domain name
+    Value: !Sub '${Environment}.${RootDomain}'
+    Export:
+      Name: !Sub '${Environment}-emosaic-domain-name'
