@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  emosaic:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: emosaic:latest
+    container_name: emosaic-test
+    environment:
+      # AWS credentials (will be passed from host)
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+
+      # Job configuration
+      - S3_BUCKET=${S3_BUCKET:-emosaic-tiles-prod}
+      - SOURCE_IMAGE_KEY=${SOURCE_IMAGE_KEY:-test/input.jpg}
+      - OUTPUT_KEY=${OUTPUT_KEY:-test/output.html}
+      - TILES_PREFIX=${TILES_PREFIX:-tiles/}
+
+      # Mosaic parameters
+      - TILE_SIZE=${TILE_SIZE:-32}
+      - MODE=${MODE:-16}
+      - TINT_OPACITY=${TINT_OPACITY:-0.5}
+      - NO_REPEAT=${NO_REPEAT:-false}
+      - CROP=${CROP:-false}
+      - RANDOMIZE=${RANDOMIZE:-0}
+
+      # Job metadata
+      - JOB_ID=${JOB_ID:-local-test}
+      - MOSAIC_ID=${MOSAIC_ID:-test-mosaic}
+
+    volumes:
+      # Mount local directories for testing without S3
+      - ./test-data/input:/app/tmp:ro
+      - ./test-data/tiles:/app/tiles:ro
+      - ./test-data/output:/app/output
+
+    # Override entrypoint for local testing if needed
+    # entrypoint: ["/bin/bash"]
+    # command: ["-c", "sleep infinity"]
+
+  # LocalStack for S3 emulation (optional, for testing without AWS)
+  localstack:
+    image: localstack/localstack:latest
+    container_name: emosaic-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+    volumes:
+      - ./test-data/localstack:/tmp/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    profiles:
+      - localstack

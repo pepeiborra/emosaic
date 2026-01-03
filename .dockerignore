@@ -1,0 +1,41 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+*.md
+docs/
+
+# Test data
+test-data/
+examples/
+
+# macOS
+.DS_Store
+
+# AWS
+aws-backend/
+
+# Node.js (if admin UI is in same repo)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Docker
+docker-compose.yml
+.dockerignore
+
+# CI/CD
+.github/

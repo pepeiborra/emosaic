@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Emosaic Job Completion Handler - Lambda triggered by Batch state changes'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'prod'
+    Description: Environment name
+
+Resources:
+  #############################################################################
+  # Job Completion Lambda Function
+  #############################################################################
+
+  JobCompletedFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-job-completed'
+      Runtime: python3.11
+      Handler: job_completed.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: '${Environment}-mosaic-lambda-role-arn'
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': json.dumps({'message': 'Placeholder'})}
+      Environment:
+        Variables:
+          JOBS_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-mosaic-jobs-table'
+          MOSAICS_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-mosaics-table'
+      Timeout: 60
+
+  # Permission for EventBridge to invoke Lambda
+  JobCompletedInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref JobCompletedFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt JobStateChangeRule.Arn
+
+  #############################################################################
+  # EventBridge Rule
+  #############################################################################
+
+  JobStateChangeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${Environment}-batch-job-state-change'
+      Description: Trigger Lambda when Batch jobs complete
+      EventPattern:
+        source:
+          - aws.batch
+        detail-type:
+          - Batch Job State Change
+        detail:
+          status:
+            - SUCCEEDED
+            - FAILED
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt JobCompletedFunction.Arn
+          Id: JobCompletedLambda
+
+Outputs:
+  JobCompletedFunctionArn:
+    Description: ARN of the job completed Lambda function
+    Value: !GetAtt JobCompletedFunction.Arn
+    Export:
+      Name: !Sub '${Environment}-job-completed-lambda-arn'
+
+  JobCompletedFunctionName:
+    Description: Name of the job completed Lambda function
+    Value: !Ref JobCompletedFunction
+    Export:
+      Name: !Sub '${Environment}-job-completed-lambda-name'

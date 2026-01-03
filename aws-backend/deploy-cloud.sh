@@ -3,8 +3,10 @@
 # Deployment script for Emosaic Cloud Infrastructure
 # This script deploys:
 # 1. Tile flags infrastructure (existing)
-# 2. Mosaic management infrastructure (new)
-# 3. Mosaic API (new)
+# 2. Mosaic management infrastructure (S3, DynamoDB, Cognito)
+# 3. Job handler (EventBridge + Lambda)
+# 4. Batch infrastructure (ECR, Batch, compute)
+# 5. Mosaic API (API Gateway + Lambda)
 
 set -e
 
@@ -12,10 +14,14 @@ ENVIRONMENT=${ENVIRONMENT:-prod}
 REGION=${AWS_REGION:-eu-west-3}
 CORS_ORIGIN=${CORS_ORIGIN:-https://casadelmanco.com}
 ADMIN_EMAIL=${ADMIN_EMAIL:-}
+VPC_ID=${VPC_ID:-}
+SUBNET_IDS=${SUBNET_IDS:-}
 
 # Stack names
 STACK_TILE_FLAGS="${ENVIRONMENT}-tile-flags-infrastructure"
 STACK_MOSAIC_INFRA="${ENVIRONMENT}-mosaic-infrastructure"
+STACK_JOB_HANDLER="${ENVIRONMENT}-job-handler"
+STACK_BATCH="${ENVIRONMENT}-batch-infrastructure"
 STACK_MOSAIC_API="${ENVIRONMENT}-mosaic-api"
 
 echo "🚀 Deploying Emosaic Cloud Infrastructure"
@@ -120,7 +126,84 @@ fi
 
 echo ""
 echo "====================================================================="
-echo "Phase 3: Deploying Mosaic API (Lambda + API Gateway)"
+echo "Phase 3: Deploying Job Handler (EventBridge + Lambda)"
+echo "====================================================================="
+echo ""
+
+# Package job handler Lambda
+echo "📦 Packaging job handler Lambda..."
+cd lambda
+zip -q -r ../job_completed.zip job_completed.py
+cd ..
+
+# Deploy job handler
+echo "🏗️  Deploying job handler stack..."
+aws cloudformation deploy \
+    --template-file cloudformation/job-handler.yaml \
+    --stack-name $STACK_JOB_HANDLER \
+    --parameter-overrides \
+        Environment=$ENVIRONMENT \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --region $REGION
+
+if [ $? -eq 0 ]; then
+    echo "✅ Job handler deployed"
+else
+    echo "❌ Job handler deployment failed"
+    exit 1
+fi
+
+# Update job handler Lambda code
+echo "📤 Updating job handler Lambda code..."
+JOB_COMPLETED_FN=$(aws cloudformation describe-stacks --stack-name $STACK_JOB_HANDLER --query "Stacks[0].Outputs[?OutputKey=='JobCompletedFunctionName'].OutputValue" --output text --region $REGION)
+aws lambda update-function-code --function-name $JOB_COMPLETED_FN --zip-file fileb://job_completed.zip --region $REGION > /dev/null
+rm -f job_completed.zip
+
+echo ""
+echo "====================================================================="
+echo "Phase 4: Deploying Batch Infrastructure (ECR + Batch)"
+echo "====================================================================="
+echo ""
+
+# Check VPC configuration
+if [ -z "$VPC_ID" ] || [ -z "$SUBNET_IDS" ]; then
+    echo "⚠️  VPC_ID and SUBNET_IDS not provided. Skipping Batch deployment."
+    echo "   Set VPC_ID and SUBNET_IDS environment variables to deploy Batch."
+    echo "   Example: VPC_ID=vpc-xxx SUBNET_IDS=subnet-xxx,subnet-yyy ./deploy-cloud.sh"
+    echo ""
+    SKIP_BATCH=true
+else
+    SKIP_BATCH=false
+    echo "VPC ID: $VPC_ID"
+    echo "Subnets: $SUBNET_IDS"
+fi
+
+if [ "$SKIP_BATCH" = "false" ]; then
+    # Deploy Batch infrastructure
+    echo "🏗️  Deploying Batch infrastructure stack..."
+    aws cloudformation deploy \
+        --template-file cloudformation/batch-infrastructure.yaml \
+        --stack-name $STACK_BATCH \
+        --parameter-overrides \
+            Environment=$ENVIRONMENT \
+            VpcId="$VPC_ID" \
+            SubnetIds="$SUBNET_IDS" \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --region $REGION
+
+    if [ $? -eq 0 ]; then
+        echo "✅ Batch infrastructure deployed"
+    else
+        echo "❌ Batch infrastructure deployment failed"
+        exit 1
+    fi
+else
+    echo "⏭️  Skipping Batch deployment"
+fi
+
+echo ""
+echo "====================================================================="
+echo "Phase 5: Deploying Mosaic API (Lambda + API Gateway)"
 echo "====================================================================="
 echo ""
 
@@ -188,10 +271,19 @@ TILES_BUCKET=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_INF
 USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_INFRA --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text --region $REGION)
 USER_POOL_CLIENT_ID=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_INFRA --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text --region $REGION)
 
+if [ "$SKIP_BATCH" = "false" ]; then
+    ECR_URI=$(aws cloudformation describe-stacks --stack-name $STACK_BATCH --query "Stacks[0].Outputs[?OutputKey=='ECRRepositoryUri'].OutputValue" --output text --region $REGION)
+    JOB_QUEUE=$(aws cloudformation describe-stacks --stack-name $STACK_BATCH --query "Stacks[0].Outputs[?OutputKey=='BatchJobQueueName'].OutputValue" --output text --region $REGION)
+fi
+
 echo "🎯 API Gateway URL: $API_URL"
 echo "🪣 S3 Tiles Bucket: $TILES_BUCKET"
 echo "👤 Cognito User Pool ID: $USER_POOL_ID"
 echo "🔑 Cognito Client ID: $USER_POOL_CLIENT_ID"
+if [ "$SKIP_BATCH" = "false" ]; then
+    echo "🐳 ECR Repository: $ECR_URI"
+    echo "⚙️  Batch Job Queue: $JOB_QUEUE"
+fi
 echo ""
 echo "API Endpoints:"
 echo "  Tile Flags:"
@@ -215,6 +307,15 @@ echo "🎉 Deployment completed successfully!"
 echo ""
 echo "Next steps:"
 echo "1. Check your email ($ADMIN_EMAIL) for Cognito temporary password"
-echo "2. Update frontend to use these API endpoints"
-echo "3. Configure CloudFront for the S3 bucket"
-echo "4. Test the API endpoints with authentication"
+
+if [ "$SKIP_BATCH" = "false" ]; then
+    echo "2. Build and push Docker image: ./build-and-push.sh"
+    echo "3. Upload source images and tiles to S3 bucket: $TILES_BUCKET"
+    echo "4. Test mosaic generation by submitting a job via API"
+    echo "5. Update frontend to use these API endpoints"
+    echo "6. Configure CloudFront for the S3 bucket (Phase 5)"
+else
+    echo "2. Deploy Batch infrastructure with VPC_ID and SUBNET_IDS"
+    echo "3. Update frontend to use these API endpoints"
+    echo "4. Configure CloudFront for the S3 bucket"
+fi

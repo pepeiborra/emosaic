@@ -178,7 +178,15 @@ Resources:
         Variables:
           JOBS_TABLE: !ImportValue
             Fn::Sub: '${Environment}-mosaic-jobs-table'
+          MOSAICS_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-mosaics-table'
           CORS_ORIGIN: !Ref CorsOrigin
+          BATCH_JOB_QUEUE: !ImportValue
+            Fn::Sub: '${Environment}-emosaic-job-queue-name'
+          BATCH_JOB_DEFINITION: !ImportValue
+            Fn::Sub: '${Environment}-emosaic-job-definition-arn'
+          S3_BUCKET: !ImportValue
+            Fn::Sub: '${Environment}-emosaic-tiles-bucket'
       Timeout: 30
 
   # Get Job Status

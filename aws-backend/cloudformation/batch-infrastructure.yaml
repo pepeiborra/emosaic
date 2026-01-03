@@ -1,0 +1,350 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Emosaic AWS Batch - Container Registry and Compute Environment'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'prod'
+    Description: Environment name
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for Batch compute environment
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnet IDs for Batch compute environment (use private subnets with NAT)
+
+  MaxvCpus:
+    Type: Number
+    Default: 4
+    Description: Maximum vCPUs for Batch compute environment
+
+Resources:
+  #############################################################################
+  # ECR Repository for emosaic Container Images
+  #############################################################################
+
+  EmosaicECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${Environment}-emosaic'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: Emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
+  #############################################################################
+  # IAM Roles for AWS Batch
+  #############################################################################
+
+  # Batch Service Role
+  BatchServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-batch-service-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: batch.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole
+
+  # ECS Task Execution Role
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-ecs-task-execution-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ECRAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+
+  # ECS Task Role (for emosaic container to access S3, DynamoDB, etc.)
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-ecs-task-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub
+                    - 'arn:aws:s3:::${BucketName}'
+                    - BucketName: !ImportValue
+                        Fn::Sub: '${Environment}-emosaic-tiles-bucket'
+                  - !Sub
+                    - 'arn:aws:s3:::${BucketName}/*'
+                    - BucketName: !ImportValue
+                        Fn::Sub: '${Environment}-emosaic-tiles-bucket'
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                Resource:
+                  - !ImportValue
+                      Fn::Sub: '${Environment}-mosaic-jobs-table-arn'
+                  - !ImportValue
+                      Fn::Sub: '${Environment}-mosaics-table-arn'
+
+  #############################################################################
+  # Security Group for Batch Compute Environment
+  #############################################################################
+
+  BatchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Batch compute environment
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-batch-sg'
+        - Key: Project
+          Value: Emosaic
+
+  #############################################################################
+  # AWS Batch Compute Environment
+  #############################################################################
+
+  BatchComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      ComputeEnvironmentName: !Sub '${Environment}-emosaic-compute'
+      Type: MANAGED
+      State: ENABLED
+      ServiceRole: !GetAtt BatchServiceRole.Arn
+      ComputeResources:
+        Type: FARGATE
+        MaxvCpus: !Ref MaxvCpus
+        Subnets: !Ref SubnetIds
+        SecurityGroupIds:
+          - !Ref BatchSecurityGroup
+      Tags:
+        Project: Emosaic
+        Environment: !Ref Environment
+
+  #############################################################################
+  # AWS Batch Job Queue
+  #############################################################################
+
+  BatchJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      JobQueueName: !Sub '${Environment}-emosaic-queue'
+      Priority: 1
+      State: ENABLED
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref BatchComputeEnvironment
+      Tags:
+        Project: Emosaic
+        Environment: !Ref Environment
+
+  #############################################################################
+  # AWS Batch Job Definition
+  #############################################################################
+
+  BatchJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Sub '${Environment}-emosaic-job'
+      Type: container
+      PlatformCapabilities:
+        - FARGATE
+      Parameters:
+        S3_BUCKET: !ImportValue
+          Fn::Sub: '${Environment}-emosaic-tiles-bucket'
+        SOURCE_IMAGE_KEY: 'placeholder'
+        OUTPUT_KEY: 'placeholder'
+        TILES_PREFIX: 'tiles/'
+        TILE_SIZE: '32'
+        MODE: '16'
+        TINT_OPACITY: '0.5'
+        NO_REPEAT: 'false'
+        CROP: 'false'
+        RANDOMIZE: '0'
+      ContainerProperties:
+        Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EmosaicECRRepository}:latest'
+        ResourceRequirements:
+          - Type: VCPU
+            Value: '4'
+          - Type: MEMORY
+            Value: '16384'
+        EphemeralStorage:
+          SizeInGiB: 50
+        JobRoleArn: !GetAtt ECSTaskRole.Arn
+        ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+        FargatePlatformConfiguration:
+          PlatformVersion: LATEST
+        Environment:
+          - Name: S3_BUCKET
+            Value: 'Ref::S3_BUCKET'
+          - Name: SOURCE_IMAGE_KEY
+            Value: 'Ref::SOURCE_IMAGE_KEY'
+          - Name: OUTPUT_KEY
+            Value: 'Ref::OUTPUT_KEY'
+          - Name: TILES_PREFIX
+            Value: 'Ref::TILES_PREFIX'
+          - Name: TILE_SIZE
+            Value: 'Ref::TILE_SIZE'
+          - Name: MODE
+            Value: 'Ref::MODE'
+          - Name: TINT_OPACITY
+            Value: 'Ref::TINT_OPACITY'
+          - Name: NO_REPEAT
+            Value: 'Ref::NO_REPEAT'
+          - Name: CROP
+            Value: 'Ref::CROP'
+          - Name: RANDOMIZE
+            Value: 'Ref::RANDOMIZE'
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref BatchLogGroup
+            awslogs-region: !Ref AWS::Region
+            awslogs-stream-prefix: emosaic
+      Tags:
+        Project: Emosaic
+        Environment: !Ref Environment
+
+  #############################################################################
+  # CloudWatch Logs
+  #############################################################################
+
+  BatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/batch/${Environment}-emosaic'
+      RetentionInDays: 30
+
+  #############################################################################
+  # EventBridge Rule for Job State Changes
+  #############################################################################
+
+  JobStateChangeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${Environment}-emosaic-job-state-change'
+      Description: Trigger Lambda when Batch job completes
+      EventPattern:
+        source:
+          - aws.batch
+        detail-type:
+          - Batch Job State Change
+        detail:
+          status:
+            - SUCCEEDED
+            - FAILED
+          jobQueue:
+            - !Ref BatchJobQueue
+      State: ENABLED
+      Targets:
+        - Arn: !ImportValue
+            Fn::Sub: '${Environment}-job-completed-lambda-arn'
+          Id: JobCompletedLambda
+
+Outputs:
+  ECRRepositoryUri:
+    Description: URI of the ECR repository
+    Value: !GetAtt EmosaicECRRepository.RepositoryUri
+    Export:
+      Name: !Sub '${Environment}-emosaic-ecr-uri'
+
+  ECRRepositoryName:
+    Description: Name of the ECR repository
+    Value: !Ref EmosaicECRRepository
+    Export:
+      Name: !Sub '${Environment}-emosaic-ecr-name'
+
+  BatchJobQueueArn:
+    Description: ARN of the Batch job queue
+    Value: !Ref BatchJobQueue
+    Export:
+      Name: !Sub '${Environment}-emosaic-job-queue-arn'
+
+  BatchJobQueueName:
+    Description: Name of the Batch job queue
+    Value: !Ref BatchJobQueue
+    Export:
+      Name: !Sub '${Environment}-emosaic-job-queue-name'
+
+  BatchJobDefinitionArn:
+    Description: ARN of the Batch job definition
+    Value: !Ref BatchJobDefinition
+    Export:
+      Name: !Sub '${Environment}-emosaic-job-definition-arn'
+
+  BatchLogGroupName:
+    Description: Name of the CloudWatch Logs group
+    Value: !Ref BatchLogGroup
+    Export:
+      Name: !Sub '${Environment}-emosaic-log-group'
+
+  ECSTaskRoleArn:
+    Description: ARN of the ECS task role
+    Value: !GetAtt ECSTaskRole.Arn
+    Export:
+      Name: !Sub '${Environment}-ecs-task-role-arn'
