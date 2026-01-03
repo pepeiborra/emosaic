@@ -54,6 +54,20 @@ const RATE_LIMIT_MAX_FLAGS = 10;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
 const MAX_ZOOM = 5;
 
+// Modal zoom constants
+const MODAL_MAX_ZOOM = 4;
+const MODAL_MIN_ZOOM = 1;
+const MODAL_ZOOM_SNAP_THRESHOLD = 1.1;
+
+// Modal zoom state
+let modalZoom = 1;
+let modalPanX = 0;
+let modalPanY = 0;
+let modalIsPanning = false;
+let modalIsZooming = false;
+let modalLastTouchDistance = 0;
+let modalLastTouchCenter = { x: 0, y: 0 };
+
 // Zoom and pan state
 let currentZoom = 1;
 let currentPanX = 0;
@@ -755,6 +769,11 @@ async function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
     // Push history state so browser back button closes modal
     history.pushState({ modalOpen: true }, '', '');
 
+    // Setup modal zoom after image loads
+    modalImage.onload = function() {
+        setupModalZoom();
+    };
+
     modalImage.src = imageUrl;
     modalImage.alt = imageUrl;
     modalImage.title = imageUrl;
@@ -818,10 +837,16 @@ function closeMobileModal(fromPopstate = false) {
     const modal = document.getElementById('mobile-modal');
     if (modal && modal.classList.contains('active')) {
         modal.classList.remove('active');
+
+        // Clean up modal zoom before clearing content
+        cleanupModalZoom();
+        resetModalZoom();
+
         // Clear modal content to prevent memory leaks
         const modalImage = document.getElementById('modal-image');
         const modalInfo = document.getElementById('modal-info');
         if (modalImage) {
+            modalImage.onload = null; // Clear the onload handler
             modalImage.src = '';
         }
         if (modalInfo) {
@@ -842,6 +867,178 @@ function closeMobileModal(fromPopstate = false) {
 
         document.body.style.overflow = '';
     }
+}
+
+// Modal image zoom functions
+function resetModalZoom() {
+    modalZoom = 1;
+    modalPanX = 0;
+    modalPanY = 0;
+    modalIsPanning = false;
+    modalIsZooming = false;
+    modalLastTouchDistance = 0;
+    modalLastTouchCenter = { x: 0, y: 0 };
+
+    const modalImage = document.getElementById('modal-image');
+    if (modalImage) {
+        modalImage.style.transform = '';
+        modalImage.style.transition = '';
+    }
+}
+
+function applyModalTransform(smooth = false) {
+    const modalImage = document.getElementById('modal-image');
+    if (!modalImage) return;
+
+    modalImage.style.transition = smooth ? 'transform 0.2s ease-out' : 'none';
+    modalImage.style.transform = `translate(${modalPanX}px, ${modalPanY}px) scale(${modalZoom})`;
+}
+
+function handleModalZoomTouchStart(e) {
+    const modalImage = document.getElementById('modal-image');
+    if (!modalImage) return;
+
+    // Only handle touches on the image or zoom wrapper
+    if (!e.target.closest('#modal-zoom-wrapper')) return;
+
+    if (e.touches.length === 1) {
+        // Single touch - only pan if zoomed in
+        modalIsPanning = modalZoom > 1;
+        modalLastTouchCenter = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else if (e.touches.length === 2) {
+        e.preventDefault();
+        e.stopPropagation();
+        modalIsZooming = true;
+        modalIsPanning = false;
+        modalLastTouchDistance = getTouchDistance(e.touches[0], e.touches[1]);
+        modalLastTouchCenter = getTouchCenter(e.touches[0], e.touches[1]);
+    }
+}
+
+function handleModalZoomTouchMove(e) {
+    const modalImage = document.getElementById('modal-image');
+    if (!modalImage) return;
+
+    // Only handle touches on the image or zoom wrapper
+    if (!e.target.closest('#modal-zoom-wrapper')) return;
+
+    if (e.touches.length === 2 && modalIsZooming) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const touchDistance = getTouchDistance(e.touches[0], e.touches[1]);
+        const touchCenter = getTouchCenter(e.touches[0], e.touches[1]);
+
+        if (modalLastTouchDistance > 0) {
+            const zoomDelta = touchDistance / modalLastTouchDistance;
+            const proposedZoom = modalZoom * zoomDelta;
+            const newZoom = Math.min(MODAL_MAX_ZOOM, Math.max(MODAL_MIN_ZOOM * 0.8, proposedZoom));
+
+            // Zoom toward pinch center
+            const rect = modalImage.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+
+            const zoomPointX = touchCenter.x - centerX;
+            const zoomPointY = touchCenter.y - centerY;
+
+            const zoomRatio = newZoom / modalZoom;
+            modalPanX = zoomPointX + (modalPanX - zoomPointX) * zoomRatio;
+            modalPanY = zoomPointY + (modalPanY - zoomPointY) * zoomRatio;
+
+            modalZoom = newZoom;
+            modalLastTouchDistance = touchDistance;
+            modalLastTouchCenter = touchCenter;
+        }
+
+        applyModalTransform(false);
+    } else if (e.touches.length === 1 && modalIsPanning && modalZoom > 1) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const deltaX = e.touches[0].clientX - modalLastTouchCenter.x;
+        const deltaY = e.touches[0].clientY - modalLastTouchCenter.y;
+
+        modalPanX += deltaX;
+        modalPanY += deltaY;
+
+        modalLastTouchCenter = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        applyModalTransform(false);
+    }
+}
+
+function handleModalZoomTouchEnd(e) {
+    // Only handle if we were zooming/panning on the modal
+    if (!modalIsZooming && !modalIsPanning) return;
+
+    if (e.touches.length === 0) {
+        modalIsZooming = false;
+        modalIsPanning = false;
+        modalLastTouchDistance = 0;
+
+        // Snap back to 1x if zoomed out below threshold
+        if (modalZoom < MODAL_ZOOM_SNAP_THRESHOLD) {
+            modalZoom = 1;
+            modalPanX = 0;
+            modalPanY = 0;
+            applyModalTransform(true);
+        }
+    } else if (e.touches.length === 1) {
+        // Transition from zoom to pan
+        modalIsZooming = false;
+        modalIsPanning = modalZoom > 1;
+        modalLastTouchCenter = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        modalLastTouchDistance = 0;
+    }
+}
+
+// Store modal zoom event handlers for cleanup
+let modalZoomEventHandlers = {
+    touchstart: null,
+    touchmove: null,
+    touchend: null
+};
+
+function setupModalZoom() {
+    const zoomWrapper = document.getElementById('modal-zoom-wrapper');
+    if (!zoomWrapper) return;
+
+    // Clean up any existing handlers first
+    cleanupModalZoom();
+
+    // Reset zoom state
+    resetModalZoom();
+
+    // Create and store handlers
+    modalZoomEventHandlers.touchstart = handleModalZoomTouchStart;
+    modalZoomEventHandlers.touchmove = handleModalZoomTouchMove;
+    modalZoomEventHandlers.touchend = handleModalZoomTouchEnd;
+
+    // Add event listeners
+    zoomWrapper.addEventListener('touchstart', modalZoomEventHandlers.touchstart, { passive: false });
+    zoomWrapper.addEventListener('touchmove', modalZoomEventHandlers.touchmove, { passive: false });
+    zoomWrapper.addEventListener('touchend', modalZoomEventHandlers.touchend, { passive: false });
+}
+
+function cleanupModalZoom() {
+    const zoomWrapper = document.getElementById('modal-zoom-wrapper');
+    if (!zoomWrapper) return;
+
+    if (modalZoomEventHandlers.touchstart) {
+        zoomWrapper.removeEventListener('touchstart', modalZoomEventHandlers.touchstart);
+    }
+    if (modalZoomEventHandlers.touchmove) {
+        zoomWrapper.removeEventListener('touchmove', modalZoomEventHandlers.touchmove);
+    }
+    if (modalZoomEventHandlers.touchend) {
+        zoomWrapper.removeEventListener('touchend', modalZoomEventHandlers.touchend);
+    }
+
+    modalZoomEventHandlers = {
+        touchstart: null,
+        touchmove: null,
+        touchend: null
+    };
 }
 
 // Modal event handlers - stored for proper cleanup

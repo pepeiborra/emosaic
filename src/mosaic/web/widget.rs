@@ -420,7 +420,9 @@ where
     <div id="mobile-modal" class="mobile-modal">
         <div class="modal-content">
             <button class="modal-close" onclick="closeMobileModal()">&times;</button>
-            <img id="modal-image" class="modal-image" alt="Tile Image" />
+            <div id="modal-zoom-wrapper" class="modal-zoom-wrapper">
+                <img id="modal-image" class="modal-image" alt="Tile Image" />
+            </div>
             <div id="modal-info" class="modal-info"></div>
         </div>
     </div>

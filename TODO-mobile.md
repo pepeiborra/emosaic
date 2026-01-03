@@ -17,29 +17,29 @@
 
 ### JS Changes (`src/assets/mosaic-widget.js`)
 
-- [ ] Add modal zoom state variables: `modalZoom`, `modalPanX`, `modalPanY`, `modalIsPanning`, `modalIsZooming`, `modalLastTouchDistance`, `modalLastTouchCenter`
-- [ ] Add constants: `MODAL_MAX_ZOOM = 4`, `MODAL_MIN_ZOOM = 1`
-- [ ] Create `setupModalZoom()` function to attach touch handlers to modal image wrapper
-- [ ] Create `handleModalTouchStart(e)` - detect single vs two-finger touch, initialize zoom/pan state
-- [ ] Create `handleModalTouchMove(e)` - handle pinch-to-zoom (2 fingers) and pan (1 finger when zoomed)
-- [ ] Create `handleModalTouchEnd(e)` - reset state, snap back to 1x if below threshold
-- [ ] Create `applyModalTransform(smooth)` - apply CSS transform to modal image
-- [ ] Create `resetModalZoom()` - reset all modal zoom state to defaults
-- [ ] Call `setupModalZoom()` in `showMobileModal()` after image loads (use `onload` event)
-- [ ] Call `resetModalZoom()` in `closeMobileModal()` before clearing modal content
-- [ ] Reuse existing `getTouchDistance()` and `getTouchCenter()` helper functions
+- [x] Add modal zoom state variables: `modalZoom`, `modalPanX`, `modalPanY`, `modalIsPanning`, `modalIsZooming`, `modalLastTouchDistance`, `modalLastTouchCenter`
+- [x] Add constants: `MODAL_MAX_ZOOM = 4`, `MODAL_MIN_ZOOM = 1`
+- [x] Create `setupModalZoom()` function to attach touch handlers to modal image wrapper
+- [x] Create `handleModalTouchStart(e)` - detect single vs two-finger touch, initialize zoom/pan state
+- [x] Create `handleModalTouchMove(e)` - handle pinch-to-zoom (2 fingers) and pan (1 finger when zoomed)
+- [x] Create `handleModalTouchEnd(e)` - reset state, snap back to 1x if below threshold
+- [x] Create `applyModalTransform(smooth)` - apply CSS transform to modal image
+- [x] Create `resetModalZoom()` - reset all modal zoom state to defaults
+- [x] Call `setupModalZoom()` in `showMobileModal()` after image loads (use `onload` event)
+- [x] Call `resetModalZoom()` in `closeMobileModal()` before clearing modal content
+- [x] Reuse existing `getTouchDistance()` and `getTouchCenter()` helper functions
 
 ### CSS Changes (`src/assets/mosaic-widget.css`)
 
-- [ ] Add `.modal-zoom-wrapper` styles: `overflow: hidden`, `touch-action: none`, flexbox centering
-- [ ] Add `.modal-image` transform styles: `transform-origin: center center`, `will-change: transform`
-- [ ] Increase `.modal-image` max-height from 50vh to 60vh for better zoom experience
-- [ ] Add smooth transition class for snap-back animation
+- [x] Add `.modal-zoom-wrapper` styles: `overflow: hidden`, `touch-action: none`, flexbox centering
+- [x] Add `.modal-image` transform styles: `transform-origin: center center`, `will-change: transform`
+- [x] Increase `.modal-image` max-height from 50vh to 60vh for better zoom experience
+- [x] Add smooth transition class for snap-back animation
 
 ### HTML Changes (`src/mosaic/web/widget.rs`)
 
-- [ ] Wrap modal image in `<div id="modal-zoom-wrapper" class="modal-zoom-wrapper">` container
-- [ ] Ensure modal image has `id="modal-image"` attribute (verify existing)
+- [x] Wrap modal image in `<div id="modal-zoom-wrapper" class="modal-zoom-wrapper">` container
+- [x] Ensure modal image has `id="modal-image"` attribute (verify existing)
 
 ---
 
@@ -112,9 +112,9 @@
    - [ ] CSS cleanup (Issue 3)
 
 3. **Phase 3: Modal Zoom**
-   - [ ] HTML wrapper structure (Issue 2)
-   - [ ] JS touch handlers (Issue 2)
-   - [ ] CSS styles (Issue 2)
+   - [x] HTML wrapper structure (Issue 2)
+   - [x] JS touch handlers (Issue 2)
+   - [x] CSS styles (Issue 2)
 
 ---
 
