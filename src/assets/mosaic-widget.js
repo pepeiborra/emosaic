@@ -518,6 +518,14 @@ window.addEventListener('load', function() {
     // Initialize admin pane
     initializeAdminPane();
 
+    // Setup popstate handler for modal back button support
+    window.addEventListener('popstate', function(event) {
+        const modal = document.getElementById('mobile-modal');
+        if (modal && modal.classList.contains('active')) {
+            closeMobileModal(true); // true = triggered by popstate, don't call history.back()
+        }
+    });
+
     // Update minimum zoom after everything is loaded
     setTimeout(() => {
         if (isMobile()) {
@@ -744,6 +752,9 @@ async function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
 
     if (!modal || !modalImage || !modalInfo) return;
 
+    // Push history state so browser back button closes modal
+    history.pushState({ modalOpen: true }, '', '');
+
     modalImage.src = imageUrl;
     modalImage.alt = imageUrl;
     modalImage.title = imageUrl;
@@ -803,9 +814,9 @@ async function showMobileModal(imageUrl, distanceInfo, dateInfo, tileElement) {
     document.body.style.overflow = 'hidden';
 }
 
-function closeMobileModal() {
+function closeMobileModal(fromPopstate = false) {
     const modal = document.getElementById('mobile-modal');
-    if (modal) {
+    if (modal && modal.classList.contains('active')) {
         modal.classList.remove('active');
         // Clear modal content to prevent memory leaks
         const modalImage = document.getElementById('modal-image');
@@ -824,6 +835,10 @@ function closeMobileModal() {
         // CRITICAL: Clean up passive:false modal event listeners immediately to prevent performance issues
         cleanupModalEvents(modal);
 
+        // Navigate back in history only if not triggered by popstate (avoid double navigation)
+        if (!fromPopstate) {
+            history.back();
+        }
 
         document.body.style.overflow = '';
     }
