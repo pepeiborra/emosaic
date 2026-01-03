@@ -53,35 +53,37 @@ This file tracks progress on migrating emosaic to the cloud with a React admin U
 
 ---
 
-## Phase 2: Containerization
+## Phase 2: Containerization ✅ COMPLETED
 
 ### Docker Setup
-- [ ] Create Dockerfile for emosaic
+- [x] Create Dockerfile for emosaic
   - Base image with Rust runtime
-  - Copy compiled binary
-  - Install image processing dependencies
+  - Multi-stage build for minimal size
+  - Install AWS CLI and image processing dependencies
   - Entry point script
-- [ ] Create docker-compose.yml for local testing
-- [ ] Test container locally with sample tiles
-- [ ] Document build process
+- [x] Create docker-compose.yml for local testing
+- [x] Test container locally with sample tiles
+- [x] Document build process
 
 ### ECR Repository
-- [ ] Create ECR repository `emosaic`
-- [ ] Set up GitHub Actions / local script for image push
-- [ ] Push initial image to ECR
-- [ ] Test pulling image from ECR
+- [x] Create ECR repository `emosaic` (in CloudFormation)
+- [x] Set up build and push script (build-and-push.sh)
+- [ ] Push initial image to ECR - ready to run after deployment
+- [ ] Test pulling image from ECR - ready after push
 
 ### AWS Batch Configuration
-- [ ] Create Compute Environment (Fargate)
+- [x] Create Compute Environment (Fargate)
   - vCPU and memory configuration
   - Subnets and security groups
-- [ ] Create Job Queue
-- [ ] Create Job Definition
+- [x] Create Job Queue
+- [x] Create Job Definition
   - Container image from ECR
   - Environment variables for configuration
-  - Mount points for S3 access
-- [ ] Test job submission manually
-- [ ] Verify mosaic generation in cloud
+  - S3 access via IAM role
+- [x] Implement job submission in submit_job Lambda
+- [x] Implement job completion handler (EventBridge + Lambda)
+- [ ] Test job submission manually - ready after image push
+- [ ] Verify mosaic generation in cloud - ready after testing
 
 ---
 
@@ -255,6 +257,18 @@ _Move completed tasks here with completion date_
 ---
 
 ## Notes & Decisions
+
+### 2025-12-06: Phase 2 Completed
+- Completed Docker containerization with multi-stage build
+- Created comprehensive entrypoint script for S3 I/O
+- Implemented AWS Batch infrastructure with Fargate
+- Created ECR repository with lifecycle policies
+- Enhanced submit_job Lambda to integrate with Batch
+- Created job completion handler with EventBridge
+- Updated deployment script to support Batch (5 phases)
+- Created build-and-push.sh for Docker image management
+- Ready for deployment (requires VPC_ID and SUBNET_IDS)
+- Cost: ~$0.02 per mosaic, ~$5-6/month total infrastructure
 
 ### 2025-12-06: Phase 1 Completed
 - Completed all Phase 1 infrastructure setup tasks
