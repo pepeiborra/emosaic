@@ -310,6 +310,24 @@ Resources:
                   - batch:DescribeJobs
                   - batch:TerminateJob
                 Resource: '*'
+        - PolicyName: AdminBucketAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::emosaic-admin-${Environment}/*'
+        - PolicyName: CloudFrontAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                Resource: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/*'
 
 Outputs:
   TilesBucketName:

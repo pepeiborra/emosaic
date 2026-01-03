@@ -1,16 +1,24 @@
 """
 Lambda function to set or unset a mosaic as the main mosaic.
 Only one mosaic can be marked as main at a time.
+When setting as main, copies mosaic files to the admin bucket for the landing page.
 """
 import json
 import os
+import time
 from decimal import Decimal
 import boto3
 from boto3.dynamodb.conditions import Key
 
 dynamodb = boto3.resource('dynamodb')
+s3 = boto3.client('s3')
+cloudfront = boto3.client('cloudfront')
+
 table = dynamodb.Table(os.environ['MOSAICS_TABLE'])
 cors_origin = os.environ['CORS_ORIGIN']
+tiles_bucket = os.environ.get('TILES_BUCKET', '')
+admin_bucket = os.environ.get('ADMIN_BUCKET', '')
+distribution_id = os.environ.get('CLOUDFRONT_DISTRIBUTION_ID', '')
 
 
 class DecimalEncoder(json.JSONEncoder):
@@ -84,6 +92,68 @@ def lambda_handler(event, context):
 
             message = f'Mosaic {mosaic_id} set as main'
             print(message)
+
+            # Copy mosaic files to admin bucket for landing page
+            if tiles_bucket and admin_bucket:
+                mosaic = response['Item']
+
+                # Check if mosaic is completed
+                if mosaic.get('status') != 'completed':
+                    print(f"Warning: Mosaic {mosaic_id} status is {mosaic.get('status')}, not 'completed'")
+
+                # Files to copy from tiles bucket to admin bucket
+                files_to_copy = [
+                    ('mosaic.png', 'mosaic.png', 'image/png'),
+                    ('mosaic_widget.html', 'index.html', 'text/html; charset=utf-8'),
+                    ('mosaic-widget.css', 'mosaic-widget.css', 'text/css'),
+                    ('mosaic-widget.js', 'mosaic-widget.js', 'application/javascript'),
+                ]
+
+                copy_errors = []
+                for src_file, dst_file, content_type in files_to_copy:
+                    try:
+                        source_key = f'mosaics/{mosaic_id}/{src_file}'
+                        s3.copy_object(
+                            Bucket=admin_bucket,
+                            CopySource={'Bucket': tiles_bucket, 'Key': source_key},
+                            Key=dst_file,
+                            ContentType=content_type,
+                            MetadataDirective='REPLACE'
+                        )
+                        print(f"Copied {source_key} to {admin_bucket}/{dst_file}")
+                    except Exception as copy_error:
+                        error_msg = f"Failed to copy {src_file}: {str(copy_error)}"
+                        print(error_msg)
+                        copy_errors.append(error_msg)
+
+                if copy_errors:
+                    print(f"Copy errors: {copy_errors}")
+
+                # Invalidate CloudFront cache
+                if distribution_id:
+                    try:
+                        invalidation_response = cloudfront.create_invalidation(
+                            DistributionId=distribution_id,
+                            InvalidationBatch={
+                                'Paths': {
+                                    'Quantity': 5,
+                                    'Items': [
+                                        '/',
+                                        '/index.html',
+                                        '/mosaic.png',
+                                        '/mosaic-widget.css',
+                                        '/mosaic-widget.js'
+                                    ]
+                                },
+                                'CallerReference': str(time.time())
+                            }
+                        )
+                        invalidation_id = invalidation_response['Invalidation']['Id']
+                        print(f"Created CloudFront invalidation: {invalidation_id}")
+                    except Exception as cf_error:
+                        print(f"CloudFront invalidation failed (non-fatal): {str(cf_error)}")
+            else:
+                print("Skipping file copy - TILES_BUCKET or ADMIN_BUCKET not configured")
 
         else:
             # Unset main flag
