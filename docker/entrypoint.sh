@@ -3,6 +3,7 @@
 # Handles S3 download/upload and mosaic generation
 
 set -e
+set -o pipefail
 
 # Function to write structured error and exit
 write_error_and_exit() {

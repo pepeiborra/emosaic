@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use std::{fs, io, thread};
 
 use clap::{self, Args, Parser, Subcommand, ValueEnum};
-use image::{imageops, DynamicImage, ImageFormat, Rgb, Rgba, RgbaImage};
+use image::{imageops, ImageFormat, Rgb};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
@@ -446,32 +446,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             .map_err(|e| format!("Mosaic generation failed: {}", e))?;
 
-            let output = img_and_stats.img;
+            let mut output = img_and_stats.img;
 
             eprintln!("✓ Mosaic generation completed successfully");
             eprintln!("📝 Writing output file to {}", output_path.display());
 
             if tint_opacity > 0.0 {
-                // Create overlay more efficiently using from_fn
-                let alpha_value = (255.0 * tint_opacity) as u8;
-                let overlay = RgbaImage::from_fn(img.width(), img.height(), |x, y| {
-                    let p = img.get_pixel(x, y);
-                    Rgba([p[0], p[1], p[2], alpha_value])
-                });
+                // Memory-efficient tint: blend in-place without creating large intermediate buffers
+                // Instead of resizing a full RGBA overlay and converting output to RGBA,
+                // we directly blend each pixel by sampling the source image.
+                let scale_x = img.width() as f32 / output.width() as f32;
+                let scale_y = img.height() as f32 / output.height() as f32;
+                let tint_opacity = tint_opacity as f32;
+                let inv_opacity = 1.0 - tint_opacity;
 
-                // Scale up to match the output size
-                let overlay = imageops::resize(
-                    &overlay,
-                    output.width(),
-                    output.height(),
-                    FilterType::Nearest,
-                );
+                for (x, y, pixel) in output.enumerate_pixels_mut() {
+                    // Sample source image at corresponding position (nearest neighbor)
+                    let src_x = ((x as f32) * scale_x) as u32;
+                    let src_y = ((y as f32) * scale_y) as u32;
+                    let src_pixel = img.get_pixel(
+                        src_x.min(img.width() - 1),
+                        src_y.min(img.height() - 1),
+                    );
 
-                // Apply overlay
-                let mut output2 = DynamicImage::ImageRgb8(output).to_rgba8();
-                imageops::overlay(&mut output2, &overlay, 0, 0);
+                    // Blend: output = output * (1 - opacity) + source * opacity
+                    pixel[0] =
+                        (pixel[0] as f32 * inv_opacity + src_pixel[0] as f32 * tint_opacity) as u8;
+                    pixel[1] =
+                        (pixel[1] as f32 * inv_opacity + src_pixel[1] as f32 * tint_opacity) as u8;
+                    pixel[2] =
+                        (pixel[2] as f32 * inv_opacity + src_pixel[2] as f32 * tint_opacity) as u8;
+                }
 
-                output2
+                output
                     .save_with_format(&output_path, ImageFormat::Png)
                     .map_err(|e| {
                         format!(
@@ -480,6 +487,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             e
                         )
                     })?;
+                eprintln!("✓ Output image saved successfully");
             } else {
                 output
                     .save_with_format(&output_path, ImageFormat::Png)
@@ -490,6 +498,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             e
                         )
                     })?;
+                eprintln!("✓ Output image saved successfully");
             }
 
             if let Some(stats_img) = img_and_stats.stats_img {
