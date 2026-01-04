@@ -466,10 +466,13 @@ echo "Phase 6.5: Deploying User Management API"
 echo "====================================================================="
 echo ""
 
-# Package user management Lambda
-echo "📦 Packaging user management Lambda..."
+# Package user management Lambda functions
+echo "📦 Packaging user management Lambda functions..."
 cd lambda/mosaic
 zip -q -r ../../user_management.zip user_management.py
+zip -q -r ../../captcha.zip captcha.py
+# Include captcha.py in registration.zip since registration.py imports from it
+zip -q -r ../../registration.zip registration.py captcha.py
 cd ../..
 
 # Deploy user management stack
@@ -495,7 +498,27 @@ echo "📤 Updating user management Lambda code..."
 USER_MGMT_FN=$(aws cloudformation describe-stacks --stack-name $STACK_USER_MGMT --query "Stacks[0].Outputs[?OutputKey=='UserManagementFunctionName'].OutputValue" --output text --region $REGION)
 aws lambda update-function-code --function-name $USER_MGMT_FN --zip-file fileb://user_management.zip --region $REGION > /dev/null
 
-rm -f user_management.zip
+# Update captcha Lambda code
+echo "📤 Updating captcha Lambda code..."
+CAPTCHA_FN=$(aws cloudformation describe-stacks --stack-name $STACK_USER_MGMT --query "Stacks[0].Outputs[?OutputKey=='CaptchaFunctionName'].OutputValue" --output text --region $REGION)
+if [ -n "$CAPTCHA_FN" ] && [ "$CAPTCHA_FN" != "None" ]; then
+    aws lambda update-function-code --function-name $CAPTCHA_FN --zip-file fileb://captcha.zip --region $REGION > /dev/null
+    echo "✅ Captcha Lambda code updated"
+else
+    echo "⚠️  Captcha Lambda not found (may not be deployed yet)"
+fi
+
+# Update registration Lambda code
+echo "📤 Updating registration Lambda code..."
+REGISTRATION_FN=$(aws cloudformation describe-stacks --stack-name $STACK_USER_MGMT --query "Stacks[0].Outputs[?OutputKey=='RegistrationFunctionName'].OutputValue" --output text --region $REGION)
+if [ -n "$REGISTRATION_FN" ] && [ "$REGISTRATION_FN" != "None" ]; then
+    aws lambda update-function-code --function-name $REGISTRATION_FN --zip-file fileb://registration.zip --region $REGION > /dev/null
+    echo "✅ Registration Lambda code updated"
+else
+    echo "⚠️  Registration Lambda not found (may not be deployed yet)"
+fi
+
+rm -f user_management.zip captcha.zip registration.zip
 
 echo ""
 echo "====================================================================="
@@ -1123,6 +1146,15 @@ echo "    DELETE $API_URL/users/{username}          - Delete user"
 echo "    POST   $API_URL/users/{username}/resend-invite - Resend invite"
 echo "    PUT    $API_URL/users/{username}/enable   - Enable user"
 echo "    PUT    $API_URL/users/{username}/disable  - Disable user"
+echo ""
+echo "  Registration (public):"
+echo "    GET    $API_URL/captcha                   - Get captcha challenge"
+echo "    POST   $API_URL/register                  - Submit registration request"
+echo ""
+echo "  Registration Management (require Cognito auth):"
+echo "    GET    $API_URL/registrations             - List pending registrations"
+echo "    POST   $API_URL/registrations/{id}/approve - Approve registration"
+echo "    POST   $API_URL/registrations/{id}/reject  - Reject registration"
 echo ""
 echo "🎉 Deployment completed successfully!"
 echo ""

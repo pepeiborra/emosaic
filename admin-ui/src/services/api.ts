@@ -10,6 +10,10 @@ import type {
   TileFoldersResponse,
   ImageUploadResult,
   BulkUploadResponse,
+  PendingRegistrationsResponse,
+  RegistrationActionResponse,
+  CaptchaResponse,
+  SubmitRegistrationRequest,
 } from '../types/api';
 
 // In development, use /api which is proxied by Vite
@@ -338,6 +342,51 @@ export async function uploadImages(
   );
 
   return results;
+}
+
+// Public registration endpoints (no auth required)
+async function publicRequest<T>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(error.error || error.message || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export async function getCaptcha(): Promise<CaptchaResponse> {
+  return publicRequest('/captcha');
+}
+
+export async function submitRegistration(data: SubmitRegistrationRequest): Promise<RegistrationActionResponse> {
+  return publicRequest('/register', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+// Admin registration management endpoints
+export async function listPendingRegistrations(): Promise<PendingRegistrationsResponse> {
+  return apiRequest('/registrations');
+}
+
+export async function approveRegistration(id: string): Promise<RegistrationActionResponse> {
+  return apiRequest(`/registrations/${id}/approve`, { method: 'POST' });
+}
+
+export async function rejectRegistration(id: string): Promise<RegistrationActionResponse> {
+  return apiRequest(`/registrations/${id}/reject`, { method: 'POST' });
 }
 
 export type { ImageUploadResult };

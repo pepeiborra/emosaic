@@ -146,3 +146,35 @@ export interface BulkUploadResponse {
   invalid: number;
   errors: number;
 }
+
+// Registration types
+export interface PendingRegistration {
+  id: string;
+  email: string;
+  name: string;
+  created_at: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+}
+
+export interface PendingRegistrationsResponse {
+  registrations: PendingRegistration[];
+  count: number;
+}
+
+export interface RegistrationActionResponse {
+  success: boolean;
+  message?: string;
+  error?: string;
+}
+
+export interface CaptchaResponse {
+  id: string;
+  question: string;
+}
+
+export interface SubmitRegistrationRequest {
+  email: string;
+  name: string;
+  captcha_id: string;
+  captcha_answer: string;
+}

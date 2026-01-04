@@ -42,6 +42,8 @@ export const en = {
     forgotPassword: 'Forgot your password?',
     signIn: 'Sign in',
     signingIn: 'Signing in...',
+    noAccount: "Don't have an account?",
+    requestAccess: 'Request access',
 
     // New password
     setNewPassword: 'Set New Password',
@@ -68,6 +70,27 @@ export const en = {
     enterCodeFromEmail: 'Enter code from email',
     resetting: 'Resetting...',
     passwordResetSuccess: 'Password reset successfully. Please sign in.',
+  },
+
+  // Register page
+  register: {
+    title: 'Request Access',
+    subtitle: 'Fill out the form below to request access to the admin panel',
+    nameLabel: 'Full Name',
+    namePlaceholder: 'Your name',
+    emailLabel: 'Email Address',
+    emailPlaceholder: 'your@email.com',
+    captchaLabel: 'Security Question',
+    captchaPlaceholder: 'Enter the answer',
+    refreshCaptcha: 'Get new question',
+    submit: 'Submit Request',
+    submitting: 'Submitting...',
+    alreadyHaveAccount: 'Already have an account? Sign in',
+    backToLogin: 'Back to login',
+    successTitle: 'Request Submitted',
+    successMessage: 'Your access request has been submitted. An administrator will review it and you will receive an email when your account is approved.',
+    captchaLoadError: 'Failed to load security question. Please try again.',
+    submitError: 'Failed to submit registration. Please try again.',
   },
 
   // Dashboard
@@ -309,6 +332,10 @@ export const en = {
     subtitle: 'Manage admin users who can access the mosaic dashboard',
     addUser: 'Add User',
 
+    // Tabs
+    usersTab: 'Users',
+    pendingTab: 'Pending Requests',
+
     // Status labels
     statusLabels: {
       active: 'Active',
@@ -318,12 +345,25 @@ export const en = {
       archived: 'Archived',
       compromised: 'Compromised',
       disabled: 'Disabled',
+      pendingApproval: 'Pending Approval',
     },
 
     // Actions
     resendInvite: 'Resend invitation email',
     noUsersFound: 'No users found',
+    noPendingRegistrations: 'No pending registration requests',
     createdLabel: 'Created',
+    requestedLabel: 'Requested',
+
+    // Approve/Reject
+    approve: 'Approve',
+    approving: 'Approving...',
+    reject: 'Reject',
+    rejecting: 'Rejecting...',
+    registrationApproved: 'Registration approved. User will receive an invitation email.',
+    registrationRejected: 'Registration rejected.',
+    failedToApprove: 'Failed to approve registration',
+    failedToReject: 'Failed to reject registration',
 
     // Create user modal
     addNewUser: 'Add New User',

@@ -14,7 +14,7 @@ Parameters:
 
 Resources:
   #############################################################################
-  # Lambda Function
+  # Lambda Function - User Management
   #############################################################################
 
   UserManagementFunction:
@@ -66,6 +66,149 @@ Resources:
                   - 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${UserPoolId}'
                   - UserPoolId: !ImportValue
                       Fn::Sub: '${Environment}-emosaic-user-pool-id'
+
+  #############################################################################
+  # Lambda Function - Registration (Public + Admin)
+  #############################################################################
+
+  RegistrationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-registration'
+      Runtime: python3.11
+      Handler: registration.lambda_handler
+      Role: !GetAtt RegistrationRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': json.dumps({'message': 'Placeholder'})}
+      Environment:
+        Variables:
+          USER_POOL_ID: !ImportValue
+            Fn::Sub: '${Environment}-emosaic-user-pool-id'
+          PENDING_REGISTRATIONS_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-pending-registrations-table'
+          CAPTCHA_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-captcha-table'
+          CORS_ORIGIN: !Ref CorsOrigin
+          ADMIN_EMAIL_FROM: 'noreply@casadelmanco.com'
+          ADMIN_PANEL_URL: !Sub 'https://casadelmanco.com/admin'
+      Timeout: 30
+
+  RegistrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-registration-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !Sub
+                    - 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}'
+                    - TableName: !ImportValue
+                        Fn::Sub: '${Environment}-pending-registrations-table'
+                  - !Sub
+                    - 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/index/*'
+                    - TableName: !ImportValue
+                        Fn::Sub: '${Environment}-pending-registrations-table'
+                  - !Sub
+                    - 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}'
+                    - TableName: !ImportValue
+                        Fn::Sub: '${Environment}-captcha-table'
+        - PolicyName: CognitoAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cognito-idp:ListUsers
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminGetUser
+                Resource: !Sub
+                  - 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${UserPoolId}'
+                  - UserPoolId: !ImportValue
+                      Fn::Sub: '${Environment}-emosaic-user-pool-id'
+        - PolicyName: SESAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+
+  #############################################################################
+  # Lambda Function - Captcha (Public)
+  #############################################################################
+
+  CaptchaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-captcha'
+      Runtime: python3.11
+      Handler: captcha.lambda_handler
+      Role: !GetAtt CaptchaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {'statusCode': 200, 'body': json.dumps({'message': 'Placeholder'})}
+      Environment:
+        Variables:
+          CAPTCHA_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-captcha-table'
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 10
+
+  CaptchaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-captcha-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                Resource:
+                  - !Sub
+                    - 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}'
+                    - TableName: !ImportValue
+                        Fn::Sub: '${Environment}-captcha-table'
 
   #############################################################################
   # API Gateway Resources
@@ -184,6 +327,60 @@ Resources:
         Fn::Sub: '${Environment}-tile-flags-api-id'
       ParentId: !Ref UserByUsernameResource
       PathPart: 'disable'
+
+  # /register resource (public)
+  RegisterResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !GetAtt APIRootResource.ResourceId
+      PathPart: 'register'
+
+  # /captcha resource (public)
+  CaptchaResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !GetAtt APIRootResource.ResourceId
+      PathPart: 'captcha'
+
+  # /registrations resource (admin)
+  RegistrationsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !GetAtt APIRootResource.ResourceId
+      PathPart: 'registrations'
+
+  # /registrations/{id} resource
+  RegistrationByIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !Ref RegistrationsResource
+      PathPart: '{id}'
+
+  # /registrations/{id}/approve resource
+  ApproveRegistrationResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !Ref RegistrationByIdResource
+      PathPart: 'approve'
+
+  # /registrations/{id}/reject resource
+  RejectRegistrationResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !Ref RegistrationByIdResource
+      PathPart: 'reject'
 
   #############################################################################
   # CORS OPTIONS Methods
@@ -314,6 +511,136 @@ Resources:
             method.response.header.Access-Control-Allow-Methods: true
             method.response.header.Access-Control-Allow-Origin: true
 
+  # OPTIONS /register (public)
+  RegisterOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref RegisterResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # OPTIONS /captcha (public)
+  CaptchaOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref CaptchaResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # OPTIONS /registrations (admin)
+  RegistrationsOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref RegistrationsResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # OPTIONS /registrations/{id}/approve
+  ApproveRegistrationOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ApproveRegistrationResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # OPTIONS /registrations/{id}/reject
+  RejectRegistrationOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref RejectRegistrationResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
   #############################################################################
   # API Methods
   #############################################################################
@@ -434,6 +761,96 @@ Resources:
           - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
           - LambdaArn: !GetAtt UserManagementFunction.Arn
 
+  # GET /captcha - Generate captcha (public)
+  GetCaptchaMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref CaptchaResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt CaptchaFunction.Arn
+
+  # POST /register - Submit registration (public)
+  SubmitRegistrationMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref RegisterResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt RegistrationFunction.Arn
+
+  # GET /registrations - List pending registrations (admin)
+  ListRegistrationsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref RegistrationsResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt RegistrationFunction.Arn
+
+  # POST /registrations/{id}/approve - Approve registration (admin)
+  ApproveRegistrationMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ApproveRegistrationResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      RequestParameters:
+        method.request.path.id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt RegistrationFunction.Arn
+
+  # POST /registrations/{id}/reject - Reject registration (admin)
+  RejectRegistrationMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref RejectRegistrationResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !ImportValue
+        Fn::Sub: '${Environment}-cognito-authorizer-id'
+      RequestParameters:
+        method.request.path.id: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt RegistrationFunction.Arn
+
   #############################################################################
   # Lambda Permission
   #############################################################################
@@ -442,6 +859,28 @@ Resources:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref UserManagementFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  RegistrationPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RegistrationFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  CaptchaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CaptchaFunction
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub
@@ -467,6 +906,16 @@ Resources:
       - ResendInviteOptionsMethod
       - EnableUserOptionsMethod
       - DisableUserOptionsMethod
+      - GetCaptchaMethod
+      - CaptchaOptionsMethod
+      - SubmitRegistrationMethod
+      - RegisterOptionsMethod
+      - ListRegistrationsMethod
+      - RegistrationsOptionsMethod
+      - ApproveRegistrationMethod
+      - ApproveRegistrationOptionsMethod
+      - RejectRegistrationMethod
+      - RejectRegistrationOptionsMethod
     Properties:
       RestApiId: !ImportValue
         Fn::Sub: '${Environment}-tile-flags-api-id'
@@ -482,3 +931,15 @@ Outputs:
   UserManagementFunctionArn:
     Description: ARN of the user management function
     Value: !GetAtt UserManagementFunction.Arn
+
+  RegistrationFunctionName:
+    Description: Name of the registration function
+    Value: !Ref RegistrationFunction
+    Export:
+      Name: !Sub '${Environment}-registration-function'
+
+  CaptchaFunctionName:
+    Description: Name of the captcha function
+    Value: !Ref CaptchaFunction
+    Export:
+      Name: !Sub '${Environment}-captcha-function'

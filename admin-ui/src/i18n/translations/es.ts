@@ -44,6 +44,8 @@ export const es: Translations = {
     forgotPassword: 'Olvidaste tu contrasena?',
     signIn: 'Iniciar sesion',
     signingIn: 'Iniciando sesion...',
+    noAccount: 'No tienes cuenta?',
+    requestAccess: 'Solicitar acceso',
 
     // New password
     setNewPassword: 'Establecer nueva contrasena',
@@ -70,6 +72,27 @@ export const es: Translations = {
     enterCodeFromEmail: 'Introduce el codigo del correo',
     resetting: 'Restableciendo...',
     passwordResetSuccess: 'Contrasena restablecida correctamente. Por favor, inicia sesion.',
+  },
+
+  // Register page
+  register: {
+    title: 'Solicitar Acceso',
+    subtitle: 'Completa el formulario para solicitar acceso al panel de administracion',
+    nameLabel: 'Nombre completo',
+    namePlaceholder: 'Tu nombre',
+    emailLabel: 'Correo electronico',
+    emailPlaceholder: 'tu@correo.com',
+    captchaLabel: 'Pregunta de seguridad',
+    captchaPlaceholder: 'Introduce la respuesta',
+    refreshCaptcha: 'Nueva pregunta',
+    submit: 'Enviar solicitud',
+    submitting: 'Enviando...',
+    alreadyHaveAccount: 'Ya tienes cuenta? Iniciar sesion',
+    backToLogin: 'Volver al inicio de sesion',
+    successTitle: 'Solicitud enviada',
+    successMessage: 'Tu solicitud de acceso ha sido enviada. Un administrador la revisara y recibiras un correo cuando tu cuenta sea aprobada.',
+    captchaLoadError: 'Error al cargar la pregunta de seguridad. Por favor, intentalo de nuevo.',
+    submitError: 'Error al enviar la solicitud. Por favor, intentalo de nuevo.',
   },
 
   // Dashboard
@@ -311,6 +334,10 @@ export const es: Translations = {
     subtitle: 'Gestiona los usuarios administradores que pueden acceder al panel de mosaicos',
     addUser: 'Anadir usuario',
 
+    // Tabs
+    usersTab: 'Usuarios',
+    pendingTab: 'Solicitudes pendientes',
+
     // Status labels
     statusLabels: {
       active: 'Activo',
@@ -320,12 +347,25 @@ export const es: Translations = {
       archived: 'Archivado',
       compromised: 'Comprometido',
       disabled: 'Deshabilitado',
+      pendingApproval: 'Pendiente de aprobacion',
     },
 
     // Actions
     resendInvite: 'Reenviar correo de invitacion',
     noUsersFound: 'No se encontraron usuarios',
+    noPendingRegistrations: 'No hay solicitudes de registro pendientes',
     createdLabel: 'Creado',
+    requestedLabel: 'Solicitado',
+
+    // Approve/Reject
+    approve: 'Aprobar',
+    approving: 'Aprobando...',
+    reject: 'Rechazar',
+    rejecting: 'Rechazando...',
+    registrationApproved: 'Registro aprobado. El usuario recibira un correo de invitacion.',
+    registrationRejected: 'Registro rechazado.',
+    failedToApprove: 'Error al aprobar el registro',
+    failedToReject: 'Error al rechazar el registro',
 
     // Create user modal
     addNewUser: 'Anadir nuevo usuario',

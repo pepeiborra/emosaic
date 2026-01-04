@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useTranslation } from '../i18n';
 
@@ -478,6 +478,16 @@ export function Login() {
             >
               {isSubmitting ? t.login.signingIn : t.login.signIn}
             </button>
+          </div>
+
+          <div className="text-center">
+            <span className="text-sm text-gray-600">{t.login.noAccount} </span>
+            <Link
+              to="/register"
+              className="text-sm text-indigo-600 hover:text-indigo-500 font-medium"
+            >
+              {t.login.requestAccess}
+            </Link>
           </div>
         </form>
       </div>

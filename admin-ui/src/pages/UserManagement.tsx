@@ -7,9 +7,12 @@ import {
   resendUserInvite,
   enableUser,
   disableUser,
+  listPendingRegistrations,
+  approveRegistration,
+  rejectRegistration,
 } from '../services/api';
 import { useTranslation } from '../i18n';
-import type { User } from '../types/api';
+import type { User, PendingRegistration } from '../types/api';
 
 function UserIcon({ className }: { className?: string }) {
   return (
@@ -89,6 +92,7 @@ function useStatusLabel(status: User['status'], enabled: boolean): string {
 export function UserManagement() {
   const queryClient = useQueryClient();
   const t = useTranslation();
+  const [activeTab, setActiveTab] = useState<'users' | 'pending'>('users');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
@@ -98,6 +102,11 @@ export function UserManagement() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['users'],
     queryFn: listUsers,
+  });
+
+  const { data: pendingData, isLoading: pendingLoading } = useQuery({
+    queryKey: ['pending-registrations'],
+    queryFn: listPendingRegistrations,
   });
 
   const createMutation = useMutation({
@@ -177,6 +186,37 @@ export function UserManagement() {
     },
   });
 
+  const approveMutation = useMutation({
+    mutationFn: approveRegistration,
+    onSuccess: (result) => {
+      if (result.success) {
+        setActionSuccess(result.message || t.userManagement.registrationApproved);
+        queryClient.invalidateQueries({ queryKey: ['pending-registrations'] });
+        queryClient.invalidateQueries({ queryKey: ['users'] });
+      } else {
+        setActionError(result.error || t.userManagement.failedToApprove);
+      }
+    },
+    onError: (err: Error) => {
+      setActionError(err.message);
+    },
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: rejectRegistration,
+    onSuccess: (result) => {
+      if (result.success) {
+        setActionSuccess(result.message || t.userManagement.registrationRejected);
+        queryClient.invalidateQueries({ queryKey: ['pending-registrations'] });
+      } else {
+        setActionError(result.error || t.userManagement.failedToReject);
+      }
+    },
+    onError: (err: Error) => {
+      setActionError(err.message);
+    },
+  });
+
   const handleCreateUser = (e: React.FormEvent) => {
     e.preventDefault();
     setActionError(null);
@@ -208,6 +248,8 @@ export function UserManagement() {
   }
 
   const users = data?.users || [];
+  const pendingRegistrations = pendingData?.registrations || [];
+  const pendingCount = pendingRegistrations.length;
 
   return (
     <div>
@@ -231,6 +273,37 @@ export function UserManagement() {
         </button>
       </div>
 
+      {/* Tabs */}
+      <div className="mb-6 border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8">
+          <button
+            onClick={() => setActiveTab('users')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+              activeTab === 'users'
+                ? 'border-indigo-500 text-indigo-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            {t.userManagement.usersTab}
+          </button>
+          <button
+            onClick={() => setActiveTab('pending')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm flex items-center ${
+              activeTab === 'pending'
+                ? 'border-indigo-500 text-indigo-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            {t.userManagement.pendingTab}
+            {pendingCount > 0 && (
+              <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                {pendingCount}
+              </span>
+            )}
+          </button>
+        </nav>
+      </div>
+
       {/* Success/Error Messages */}
       {actionSuccess && (
         <div className="mb-4 bg-green-50 border border-green-200 rounded-lg p-4 flex justify-between items-center">
@@ -251,42 +324,79 @@ export function UserManagement() {
       )}
 
       {/* Users List */}
-      <div className="bg-white shadow overflow-hidden sm:rounded-lg">
-        {users.length === 0 ? (
-          <div className="p-6 text-center text-gray-500">
-            <UserIcon className="mx-auto h-12 w-12 text-gray-400" />
-            <p className="mt-2">{t.userManagement.noUsersFound}</p>
-          </div>
-        ) : (
-          <ul className="divide-y divide-gray-200">
-            {users.map((user) => (
-              <UserRow
-                key={user.username}
-                user={user}
-                onResendInvite={() => {
-                  clearMessages();
-                  resendInviteMutation.mutate(user.email || user.username);
-                }}
-                onEnable={() => {
-                  clearMessages();
-                  enableMutation.mutate(user.email || user.username);
-                }}
-                onDisable={() => {
-                  clearMessages();
-                  disableMutation.mutate(user.email || user.username);
-                }}
-                onDelete={() => {
-                  clearMessages();
-                  setConfirmDelete(user.email || user.username);
-                }}
-                isResending={resendInviteMutation.isPending}
-                isEnabling={enableMutation.isPending}
-                isDisabling={disableMutation.isPending}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
+      {activeTab === 'users' && (
+        <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+          {users.length === 0 ? (
+            <div className="p-6 text-center text-gray-500">
+              <UserIcon className="mx-auto h-12 w-12 text-gray-400" />
+              <p className="mt-2">{t.userManagement.noUsersFound}</p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-gray-200">
+              {users.map((user) => (
+                <UserRow
+                  key={user.username}
+                  user={user}
+                  onResendInvite={() => {
+                    clearMessages();
+                    resendInviteMutation.mutate(user.email || user.username);
+                  }}
+                  onEnable={() => {
+                    clearMessages();
+                    enableMutation.mutate(user.email || user.username);
+                  }}
+                  onDisable={() => {
+                    clearMessages();
+                    disableMutation.mutate(user.email || user.username);
+                  }}
+                  onDelete={() => {
+                    clearMessages();
+                    setConfirmDelete(user.email || user.username);
+                  }}
+                  isResending={resendInviteMutation.isPending}
+                  isEnabling={enableMutation.isPending}
+                  isDisabling={disableMutation.isPending}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* Pending Registrations List */}
+      {activeTab === 'pending' && (
+        <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+          {pendingLoading ? (
+            <div className="p-6 flex items-center justify-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600" />
+            </div>
+          ) : pendingRegistrations.length === 0 ? (
+            <div className="p-6 text-center text-gray-500">
+              <UserIcon className="mx-auto h-12 w-12 text-gray-400" />
+              <p className="mt-2">{t.userManagement.noPendingRegistrations}</p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-gray-200">
+              {pendingRegistrations.map((registration) => (
+                <PendingRegistrationRow
+                  key={registration.id}
+                  registration={registration}
+                  onApprove={() => {
+                    clearMessages();
+                    approveMutation.mutate(registration.id);
+                  }}
+                  onReject={() => {
+                    clearMessages();
+                    rejectMutation.mutate(registration.id);
+                  }}
+                  isApproving={approveMutation.isPending}
+                  isRejecting={rejectMutation.isPending}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Create User Modal */}
       {showCreateModal && (
@@ -489,6 +599,70 @@ function UserRow({
               title={t.common.delete}
             >
               <TrashIcon className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function PendingRegistrationRow({
+  registration,
+  onApprove,
+  onReject,
+  isApproving,
+  isRejecting,
+}: {
+  registration: PendingRegistration;
+  onApprove: () => void;
+  onReject: () => void;
+  isApproving: boolean;
+  isRejecting: boolean;
+}) {
+  const t = useTranslation();
+
+  return (
+    <li className="p-4 sm:p-6">
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center min-w-0 flex-1">
+          <div className="flex-shrink-0">
+            <div className="h-10 w-10 rounded-full bg-yellow-100 flex items-center justify-center">
+              <UserIcon className="h-6 w-6 text-yellow-600" />
+            </div>
+          </div>
+          <div className="ml-4 min-w-0">
+            <p className="text-sm font-medium text-gray-900 truncate">
+              {registration.name}
+            </p>
+            <p className="text-sm text-gray-500 truncate">
+              {registration.email}
+            </p>
+            <p className="text-xs text-gray-400">
+              {t.userManagement.requestedLabel}: {new Date(registration.created_at).toLocaleDateString()}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+            {t.userManagement.statusLabels.pendingApproval}
+          </span>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onApprove}
+              disabled={isApproving || isRejecting}
+              className="px-3 py-1 text-xs font-medium text-green-700 bg-green-100 hover:bg-green-200 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isApproving ? t.userManagement.approving : t.userManagement.approve}
+            </button>
+            <button
+              onClick={onReject}
+              disabled={isApproving || isRejecting}
+              className="px-3 py-1 text-xs font-medium text-red-700 bg-red-100 hover:bg-red-200 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isRejecting ? t.userManagement.rejecting : t.userManagement.reject}
             </button>
           </div>
         </div>
