@@ -389,4 +389,49 @@ export async function rejectRegistration(id: string): Promise<RegistrationAction
   return apiRequest(`/registrations/${id}/reject`, { method: 'POST' });
 }
 
+// Error logging types
+export interface ErrorLogEntry {
+  id: string;
+  category: string;
+  severity: string;
+  message: string;
+  step?: string;
+  original_error?: string;
+  stack?: string;
+  context?: Record<string, unknown>;
+  client_timestamp: string;
+  server_timestamp: string;
+  user_agent?: string;
+  url?: string;
+  user_email?: string;
+  user_id?: string;
+}
+
+export interface ErrorLogsResponse {
+  errors: ErrorLogEntry[];
+  count: number;
+  lastKey?: string;
+}
+
+// Error logging endpoints
+export async function listErrors(
+  options: {
+    limit?: number;
+    category?: string;
+    severity?: string;
+    since?: string;
+    lastKey?: string;
+  } = {}
+): Promise<ErrorLogsResponse> {
+  const params = new URLSearchParams();
+  if (options.limit) params.set('limit', String(options.limit));
+  if (options.category) params.set('category', options.category);
+  if (options.severity) params.set('severity', options.severity);
+  if (options.since) params.set('since', options.since);
+  if (options.lastKey) params.set('lastKey', options.lastKey);
+
+  const queryString = params.toString();
+  return apiRequest(`/errors${queryString ? `?${queryString}` : ''}`);
+}
+
 export type { ImageUploadResult };

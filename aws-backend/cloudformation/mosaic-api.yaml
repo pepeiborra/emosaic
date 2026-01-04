@@ -263,6 +263,54 @@ Resources:
           CORS_ORIGIN: !Ref CorsOrigin
       Timeout: 60
 
+  # Log Error - stores client-side errors
+  LogErrorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-log-error'
+      Runtime: python3.11
+      Handler: log_error.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: '${Environment}-mosaic-lambda-role-arn'
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'Placeholder'})
+              }
+      Environment:
+        Variables:
+          ERROR_LOGS_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-error-logs-table'
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 30
+
+  # List Errors - retrieves error logs for monitoring
+  ListErrorsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-list-errors'
+      Runtime: python3.11
+      Handler: list_errors.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: '${Environment}-mosaic-lambda-role-arn'
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({'message': 'Placeholder'})
+              }
+      Environment:
+        Variables:
+          ERROR_LOGS_TABLE: !ImportValue
+            Fn::Sub: '${Environment}-error-logs-table'
+          CORS_ORIGIN: !Ref CorsOrigin
+      Timeout: 30
+
   #############################################################################
   # API Gateway Resources
   #############################################################################
@@ -390,6 +438,15 @@ Resources:
       ParentId: !ImportValue
         Fn::Sub: '${Environment}-tiles-resource-id'
       PathPart: 'folders'
+
+  # /errors - client-side error logging
+  ErrorsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ParentId: !GetAtt APIRootResource.ResourceId
+      PathPart: 'errors'
 
   #############################################################################
   # CORS OPTIONS Methods
@@ -535,6 +592,31 @@ Resources:
             ResponseParameters:
               method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
               method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ErrorsOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ErrorsResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
               method.response.header.Access-Control-Allow-Origin: !Sub "'${CorsOrigin}'"
         RequestTemplates:
           application/json: '{"statusCode": 200}'
@@ -715,6 +797,44 @@ Resources:
           - LambdaArn: !GetAtt ListTileFoldersFunction.Arn
 
   #############################################################################
+  # API Methods - Error Logging
+  #############################################################################
+
+  # POST /errors - Log a client-side error (requires auth to prevent abuse)
+  LogErrorMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ErrorsResource
+      HttpMethod: POST
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt LogErrorFunction.Arn
+
+  # GET /errors - List error logs (requires auth)
+  ListErrorsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !ImportValue
+        Fn::Sub: '${Environment}-tile-flags-api-id'
+      ResourceId: !Ref ErrorsResource
+      HttpMethod: GET
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaArn}/invocations'
+          - LambdaArn: !GetAtt ListErrorsFunction.Arn
+
+  #############################################################################
   # Lambda Permissions
   #############################################################################
 
@@ -817,6 +937,28 @@ Resources:
         - ApiId: !ImportValue
             Fn::Sub: '${Environment}-tile-flags-api-id'
 
+  LogErrorPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LogErrorFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
+  ListErrorsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ListErrorsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub
+        - 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*/*'
+        - ApiId: !ImportValue
+            Fn::Sub: '${Environment}-tile-flags-api-id'
+
   #############################################################################
   # API Deployment
   #############################################################################
@@ -833,12 +975,15 @@ Resources:
       - GetJobMethod
       - GetTileCountMethod
       - ListTileFoldersMethod
+      - LogErrorMethod
+      - ListErrorsMethod
       - MosaicsOptionsMethod
       - MosaicIdOptionsMethod
       - JobsOptionsMethod
       - JobIdOptionsMethod
       - TilesCountOptionsMethod
       - TilesFoldersOptionsMethod
+      - ErrorsOptionsMethod
     Properties:
       RestApiId: !ImportValue
         Fn::Sub: '${Environment}-tile-flags-api-id'
@@ -886,3 +1031,11 @@ Outputs:
   ListTileFoldersFunctionName:
     Description: Name of the list tile folders function
     Value: !Ref ListTileFoldersFunction
+
+  LogErrorFunctionName:
+    Description: Name of the log error function
+    Value: !Ref LogErrorFunction
+
+  ListErrorsFunctionName:
+    Description: Name of the list errors function
+    Value: !Ref ListErrorsFunction

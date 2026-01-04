@@ -162,18 +162,40 @@ fi
 
 # Run emosaic
 echo "Command: /app/emosaic ${CMD_ARGS[*]}"
-if ! /app/emosaic "${CMD_ARGS[@]}" 2>&1 | tee /app/output/generation.log; then
+
+# Run emosaic and capture exit code (pipefail ensures we get emosaic's exit code, not tee's)
+set +e
+/app/emosaic "${CMD_ARGS[@]}" 2>&1 | tee /app/output/generation.log
+EMOSAIC_EXIT_CODE=${PIPESTATUS[0]}
+set -e
+
+if [ $EMOSAIC_EXIT_CODE -ne 0 ]; then
+    # Check for OOM: exit code 137 = SIGKILL (128+9), commonly used by OOM killer
+    if [ $EMOSAIC_EXIT_CODE -eq 137 ]; then
+        write_error_and_exit "OUT_OF_MEMORY" "Process was killed (likely OOM). Try reducing image size, tile count, or disable tint overlay."
+    fi
+
+    # Check for segfault (can happen after memory pressure)
+    if [ $EMOSAIC_EXIT_CODE -eq 139 ]; then
+        write_error_and_exit "OUT_OF_MEMORY" "Process crashed (SIGSEGV), possibly due to memory pressure. Try reducing image size or tile count."
+    fi
+
     # Check the log for specific error patterns
     if grep -q "Need.*tiles but only.*available" /app/output/generation.log 2>/dev/null; then
-        # Extract the error message from the log
         TILE_ERROR=$(grep "Need.*tiles but only.*available" /app/output/generation.log | head -1)
         write_error_and_exit "INSUFFICIENT_TILES" "$TILE_ERROR"
-    else
-        write_error_and_exit "GENERATION_FAILED" "Mosaic generation command failed. See CloudWatch logs for details."
     fi
+
+    write_error_and_exit "GENERATION_FAILED" "Mosaic generation command failed with exit code $EMOSAIC_EXIT_CODE. See CloudWatch logs for details."
 fi
 
+# Check if output was created - if not, process may have been killed during save
 if [ ! -f "$OUTPUT_IMAGE" ]; then
+    # Check if save was started but not completed (OOM during PNG encoding)
+    if grep -q "Writing output file to" /app/output/generation.log 2>/dev/null && \
+       ! grep -q "Output image saved successfully" /app/output/generation.log 2>/dev/null; then
+        write_error_and_exit "OUT_OF_MEMORY" "Process was killed during image save (likely OOM during PNG encoding). Try reducing image dimensions or using a smaller tile size."
+    fi
     write_error_and_exit "GENERATION_FAILED" "Mosaic generation completed but output image was not created"
 fi
 

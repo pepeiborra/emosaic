@@ -26,6 +26,7 @@ export const en = {
     createMosaic: 'Create Mosaic',
     uploadImages: 'Upload Images',
     users: 'Users',
+    errorLogs: 'Error Logs',
     signOut: 'Sign out',
     openSidebar: 'Open sidebar',
     appTitle: 'Casa del manco Admin',
@@ -177,6 +178,7 @@ export const en = {
     tileSizeNotDivisible: 'Tile size {tileSize} is not divisible by {dim} (required for mode {mode}). Valid sizes: {validSizes}',
     insufficientTiles: 'Insufficient tiles for no-repeat mode',
     noRepeatRequires: 'No-repeat mode requires {required} tiles, but only {available} are available. Either reduce image size, increase downsample, or disable no-repeat.',
+    tooManyTiles: 'Too many tiles',
 
     // Progress
     gettingUploadUrl: 'Getting upload URL...',
@@ -428,6 +430,69 @@ export const en = {
     duplicateImage: 'Duplicate image',
     invalidImage: 'Invalid image',
     uploadFailed: 'Upload failed',
+  },
+
+  // Error Logs page
+  errorLogs: {
+    title: 'Error Logs',
+    subtitle: 'Monitor client-side errors for debugging and investigation',
+
+    // Filters
+    filterByCategory: 'Category',
+    filterBySeverity: 'Severity',
+    allCategories: 'All Categories',
+    allSeverities: 'All Severities',
+    refresh: 'Refresh',
+    refreshing: 'Refreshing...',
+
+    // Categories
+    categories: {
+      mosaic_creation: 'Mosaic Creation',
+      image_upload: 'Image Upload',
+      api_request: 'API Request',
+      authentication: 'Authentication',
+      file_processing: 'File Processing',
+      unknown: 'Unknown',
+    },
+
+    // Severities
+    severities: {
+      error: 'Error',
+      warning: 'Warning',
+      info: 'Info',
+    },
+
+    // Table headers
+    timestamp: 'Timestamp',
+    category: 'Category',
+    severity: 'Severity',
+    message: 'Message',
+    step: 'Step',
+    user: 'User',
+    details: 'Details',
+
+    // Empty state
+    noErrors: 'No error logs found',
+    noErrorsDescription: 'Error logs will appear here when client-side errors are recorded.',
+
+    // Loading
+    loading: 'Loading error logs...',
+    loadMore: 'Load More',
+    loadingMore: 'Loading more...',
+
+    // Error detail modal
+    errorDetails: 'Error Details',
+    originalError: 'Original Error',
+    stackTrace: 'Stack Trace',
+    context: 'Context',
+    userAgent: 'User Agent',
+    url: 'URL',
+    clientTimestamp: 'Client Time',
+    serverTimestamp: 'Server Time',
+    close: 'Close',
+
+    // Errors
+    failedToLoad: 'Failed to load error logs',
   },
 };
 

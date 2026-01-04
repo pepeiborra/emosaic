@@ -366,6 +366,8 @@ zip -q -r ../../submit_job.zip submit_job.py
 zip -q -r ../../get_job.zip get_job.py
 zip -q -r ../../get_tile_count.zip get_tile_count.py
 zip -q -r ../../list_tile_folders.zip list_tile_folders.py
+zip -q -r ../../log_error.zip log_error.py
+zip -q -r ../../list_errors.zip list_errors.py
 
 cd ../..
 
@@ -398,6 +400,8 @@ SUBMIT_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --
 GETJOB_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='GetJobFunctionName'].OutputValue" --output text --region $REGION)
 GET_TILE_COUNT_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='GetTileCountFunctionName'].OutputValue" --output text --region $REGION)
 LIST_TILE_FOLDERS_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='ListTileFoldersFunctionName'].OutputValue" --output text --region $REGION)
+LOG_ERROR_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='LogErrorFunctionName'].OutputValue" --output text --region $REGION)
+LIST_ERRORS_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_API --query "Stacks[0].Outputs[?OutputKey=='ListErrorsFunctionName'].OutputValue" --output text --region $REGION)
 
 aws lambda update-function-code --function-name $LIST_FN --zip-file fileb://list_mosaics.zip --region $REGION > /dev/null
 aws lambda update-function-code --function-name $GET_FN --zip-file fileb://get_mosaic.zip --region $REGION > /dev/null
@@ -408,8 +412,14 @@ aws lambda update-function-code --function-name $SUBMIT_FN --zip-file fileb://su
 aws lambda update-function-code --function-name $GETJOB_FN --zip-file fileb://get_job.zip --region $REGION > /dev/null
 aws lambda update-function-code --function-name $GET_TILE_COUNT_FN --zip-file fileb://get_tile_count.zip --region $REGION > /dev/null
 aws lambda update-function-code --function-name $LIST_TILE_FOLDERS_FN --zip-file fileb://list_tile_folders.zip --region $REGION > /dev/null
+if [ -n "$LOG_ERROR_FN" ] && [ "$LOG_ERROR_FN" != "None" ]; then
+    aws lambda update-function-code --function-name $LOG_ERROR_FN --zip-file fileb://log_error.zip --region $REGION > /dev/null
+fi
+if [ -n "$LIST_ERRORS_FN" ] && [ "$LIST_ERRORS_FN" != "None" ]; then
+    aws lambda update-function-code --function-name $LIST_ERRORS_FN --zip-file fileb://list_errors.zip --region $REGION > /dev/null
+fi
 
-rm -f list_mosaics.zip get_mosaic.zip create_mosaic.zip update_mosaic.zip delete_mosaic.zip submit_job.zip get_job.zip get_tile_count.zip list_tile_folders.zip
+rm -f list_mosaics.zip get_mosaic.zip create_mosaic.zip update_mosaic.zip delete_mosaic.zip submit_job.zip get_job.zip get_tile_count.zip list_tile_folders.zip log_error.zip list_errors.zip
 
 echo ""
 echo "====================================================================="
@@ -1138,6 +1148,10 @@ echo ""
 echo "  Tiles (require Cognito auth):"
 echo "    GET    $API_URL/tiles/count               - Get tile count for validation"
 echo "    GET    $API_URL/tiles/folders             - List tile folders"
+echo ""
+echo "  Error Logging (require Cognito auth):"
+echo "    POST   $API_URL/errors                    - Log client-side error"
+echo "    GET    $API_URL/errors                    - List error logs"
 echo ""
 echo "  User Management (require Cognito auth):"
 echo "    GET    $API_URL/users                     - List all users"

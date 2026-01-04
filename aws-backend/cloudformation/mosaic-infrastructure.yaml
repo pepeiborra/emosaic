@@ -231,6 +231,40 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # Error logs table - stores client-side error logs for monitoring
+  ErrorLogsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${Environment}-error-logs'
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: category
+          AttributeType: S
+        - AttributeName: server_timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: by-category
+          KeySchema:
+            - AttributeName: category
+              KeyType: HASH
+            - AttributeName: server_timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: Emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
   #############################################################################
   # Cognito Custom Message Lambda Trigger
   #############################################################################
@@ -397,6 +431,8 @@ Resources:
                   - !GetAtt PendingRegistrationsTable.Arn
                   - !Sub '${PendingRegistrationsTable.Arn}/index/*'
                   - !GetAtt CaptchaTable.Arn
+                  - !GetAtt ErrorLogsTable.Arn
+                  - !Sub '${ErrorLogsTable.Arn}/index/*'
         - PolicyName: S3Access
           PolicyDocument:
             Version: '2012-10-17'
@@ -524,6 +560,18 @@ Outputs:
     Value: !Ref CaptchaTable
     Export:
       Name: !Sub '${Environment}-captcha-table'
+
+  ErrorLogsTableName:
+    Description: Name of the error logs DynamoDB table
+    Value: !Ref ErrorLogsTable
+    Export:
+      Name: !Sub '${Environment}-error-logs-table'
+
+  ErrorLogsTableArn:
+    Description: ARN of the error logs DynamoDB table
+    Value: !GetAtt ErrorLogsTable.Arn
+    Export:
+      Name: !Sub '${Environment}-error-logs-table-arn'
 
   UserPoolId:
     Description: ID of the Cognito User Pool

@@ -28,6 +28,7 @@ export const es: Translations = {
     createMosaic: 'Crear mosaico',
     uploadImages: 'Subir imagenes',
     users: 'Usuarios',
+    errorLogs: 'Registro de errores',
     signOut: 'Cerrar sesion',
     openSidebar: 'Abrir menu',
     appTitle: 'Casa del manco Admin',
@@ -179,6 +180,7 @@ export const es: Translations = {
     tileSizeNotDivisible: 'El tamano de tesela {tileSize} no es divisible por {dim} (requerido para el modo {mode}). Tamanos validos: {validSizes}',
     insufficientTiles: 'Teselas insuficientes para el modo sin repeticion',
     noRepeatRequires: 'El modo sin repeticion requiere {required} teselas, pero solo hay {available} disponibles. Reduce el tamano de la imagen, aumenta el factor de reduccion o desactiva sin repeticion.',
+    tooManyTiles: 'Demasiadas teselas',
 
     // Progress
     gettingUploadUrl: 'Obteniendo URL de subida...',
@@ -430,5 +432,68 @@ export const es: Translations = {
     duplicateImage: 'Imagen duplicada',
     invalidImage: 'Imagen no valida',
     uploadFailed: 'Error al subir',
+  },
+
+  // Error Logs page
+  errorLogs: {
+    title: 'Registro de errores',
+    subtitle: 'Monitorear errores del cliente para depuracion e investigacion',
+
+    // Filters
+    filterByCategory: 'Categoria',
+    filterBySeverity: 'Severidad',
+    allCategories: 'Todas las categorias',
+    allSeverities: 'Todas las severidades',
+    refresh: 'Actualizar',
+    refreshing: 'Actualizando...',
+
+    // Categories
+    categories: {
+      mosaic_creation: 'Creacion de mosaico',
+      image_upload: 'Subida de imagen',
+      api_request: 'Solicitud API',
+      authentication: 'Autenticacion',
+      file_processing: 'Procesamiento de archivo',
+      unknown: 'Desconocido',
+    },
+
+    // Severities
+    severities: {
+      error: 'Error',
+      warning: 'Advertencia',
+      info: 'Info',
+    },
+
+    // Table headers
+    timestamp: 'Fecha y hora',
+    category: 'Categoria',
+    severity: 'Severidad',
+    message: 'Mensaje',
+    step: 'Paso',
+    user: 'Usuario',
+    details: 'Detalles',
+
+    // Empty state
+    noErrors: 'No se encontraron errores',
+    noErrorsDescription: 'Los errores apareceran aqui cuando se registren errores del cliente.',
+
+    // Loading
+    loading: 'Cargando errores...',
+    loadMore: 'Cargar mas',
+    loadingMore: 'Cargando mas...',
+
+    // Error detail modal
+    errorDetails: 'Detalles del error',
+    originalError: 'Error original',
+    stackTrace: 'Traza de pila',
+    context: 'Contexto',
+    userAgent: 'User Agent',
+    url: 'URL',
+    clientTimestamp: 'Hora del cliente',
+    serverTimestamp: 'Hora del servidor',
+    close: 'Cerrar',
+
+    // Errors
+    failedToLoad: 'Error al cargar los errores',
   },
 };

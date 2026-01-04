@@ -2,6 +2,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { createMosaic, getUploadUrl, uploadFileToS3, submitJob, getTileCount, listTileFolders } from '../services/api';
+import { createMosaicCreationLogger } from '../services/errorLogger';
 import { useTranslation } from '../i18n';
 import type { MosaicConfig, TileFolder } from '../types/api';
 
@@ -38,6 +39,111 @@ const MODES = [
   { value: 32, label: '32 (32x32 grid matching, best quality)', dim: 32 },
   { value: 0, label: 'Random (ignore source)', dim: 1 },
 ];
+
+// Target output size in pixels (10 megapixels)
+const TARGET_OUTPUT_PIXELS = 10_000_000;
+// Maximum tiles allowed
+const MAX_TILES = 40000;
+
+/**
+ * Calculate optimal mosaic settings for a given image.
+ * Strategy:
+ * 1. Prefer higher modes over downsampling for better quality
+ * 2. Target ~10 megapixel output
+ * 3. Keep tile count under MAX_TILES
+ * 4. Enable no_repeat and crop by default
+ */
+function calculateOptimalSettings(
+  dimensions: ImageDimensions
+): Partial<MosaicConfig> {
+  const { width, height } = dimensions;
+  const imagePixels = width * height;
+
+  // Try modes from highest to lowest (excluding random mode 0)
+  const qualityModes = MODES.filter(m => m.value > 0).sort((a, b) => b.value - a.value);
+
+  for (const modeConfig of qualityModes) {
+    const mode = modeConfig.value;
+    const dim = modeConfig.dim;
+
+    // Get valid tile sizes for this mode, sorted largest to smallest
+    const validTileSizes = getValidTileSizesForMode(mode).sort((a, b) => b - a);
+
+    for (const downsample of DOWNSAMPLE_OPTIONS) {
+      // Calculate downsampled dimensions
+      const downsampledWidth = Math.floor(width / downsample);
+      const downsampledHeight = Math.floor(height / downsample);
+
+      // Adjust to multiples of dim
+      const adjustedWidth = adjustToMultiple(downsampledWidth, dim);
+      const adjustedHeight = adjustToMultiple(downsampledHeight, dim);
+
+      // Calculate grid size (number of tiles)
+      const columns = Math.floor(adjustedWidth / dim);
+      const rows = Math.floor(adjustedHeight / dim);
+      const totalTiles = columns * rows;
+
+      // Skip if too many tiles
+      if (totalTiles > MAX_TILES) continue;
+
+      // Find the best tile size to get close to TARGET_OUTPUT_PIXELS
+      for (const tileSize of validTileSizes) {
+        const outputPixels = columns * tileSize * rows * tileSize;
+
+        // Accept if output is within reasonable range (5M to 15M pixels)
+        // or if this is the best we can do with this mode
+        if (outputPixels <= TARGET_OUTPUT_PIXELS * 1.5 && outputPixels >= TARGET_OUTPUT_PIXELS * 0.5) {
+          return {
+            mode,
+            tile_size: tileSize,
+            downsample,
+            no_repeat: true,
+            crop: true,
+          };
+        }
+
+        // If output is too small, try smaller tile sizes
+        if (outputPixels > TARGET_OUTPUT_PIXELS * 1.5) {
+          continue;
+        }
+
+        // If we've gone through all tile sizes and output is too small,
+        // use the largest tile size that gives us reasonable output
+        if (outputPixels < TARGET_OUTPUT_PIXELS * 0.5 && tileSize === validTileSizes[validTileSizes.length - 1]) {
+          // Use the largest tile size for this mode/downsample combo
+          const bestTileSize = validTileSizes[0];
+          const bestOutput = columns * bestTileSize * rows * bestTileSize;
+          if (bestOutput >= 1_000_000) { // At least 1 megapixel
+            return {
+              mode,
+              tile_size: bestTileSize,
+              downsample,
+              no_repeat: true,
+              crop: true,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // Fallback: use conservative defaults
+  // Calculate a reasonable downsample based on image size
+  let downsample = 1;
+  let effectivePixels = imagePixels;
+  while (effectivePixels > TARGET_OUTPUT_PIXELS * 2 && downsample < 256) {
+    downsample *= 2;
+    effectivePixels = imagePixels / (downsample * downsample);
+  }
+
+  return {
+    mode: 4,
+    tile_size: 32,
+    downsample,
+    no_repeat: true,
+    crop: true,
+  };
+}
 
 /**
  * Get the grid dimension for a mode value.
@@ -387,8 +493,8 @@ export function CreateMosaic() {
     tile_size: 32,
     mode: 4,
     tint_opacity: 0.3,
-    no_repeat: false,
-    crop: false,
+    no_repeat: true,
+    crop: true,
     downsample: 1,
     excluded_folders: [],
   });
@@ -449,10 +555,20 @@ export function CreateMosaic() {
       reader.onload = (e) => setPreview(e.target?.result as string);
       reader.readAsDataURL(selectedFile);
 
-      // Extract image dimensions
+      // Extract image dimensions and calculate optimal settings
       try {
         const dims = await getImageDimensions(selectedFile);
         setImageDimensions(dims);
+
+        // Calculate and apply optimal settings for this image
+        const optimalSettings = calculateOptimalSettings(dims);
+        setConfig(prev => ({
+          ...prev,
+          ...optimalSettings,
+          // Preserve user's excluded_folders and tint_opacity choices
+          excluded_folders: prev.excluded_folders,
+          tint_opacity: prev.tint_opacity,
+        }));
       } catch {
         setImageDimensions(null);
       }
@@ -468,10 +584,20 @@ export function CreateMosaic() {
       reader.onload = (e) => setPreview(e.target?.result as string);
       reader.readAsDataURL(droppedFile);
 
-      // Extract image dimensions
+      // Extract image dimensions and calculate optimal settings
       try {
         const dims = await getImageDimensions(droppedFile);
         setImageDimensions(dims);
+
+        // Calculate and apply optimal settings for this image
+        const optimalSettings = calculateOptimalSettings(dims);
+        setConfig(prev => ({
+          ...prev,
+          ...optimalSettings,
+          // Preserve user's excluded_folders and tint_opacity choices
+          excluded_folders: prev.excluded_folders,
+          tint_opacity: prev.tint_opacity,
+        }));
       } catch {
         setImageDimensions(null);
       }
@@ -482,28 +608,99 @@ export function CreateMosaic() {
     mutationFn: async () => {
       if (!file) throw new Error('No file selected');
 
-      // Step 1: Get presigned URL
-      setUploadProgress(t.createMosaic.gettingUploadUrl);
-      const { upload_url, s3_key } = await getUploadUrl(file.type, file.name);
-
-      // Step 2: Upload file to S3
-      setUploadProgress(t.createMosaic.uploadingImage);
-      await uploadFileToS3(file, upload_url);
-
-      // Step 3: Create mosaic record
-      setUploadProgress(t.createMosaic.creatingMosaic);
-      const mosaic = await createMosaic({
-        title: title || undefined,
-        source_image_path: s3_key,
-        config,
-        tiles_dir: tilesDir,
+      // Create error logger with mosaic creation context
+      const errorLogger = createMosaicCreationLogger({
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+        config: config,
+        imageDimensions: imageDimensions,
       });
 
-      // Step 4: Submit job
-      setUploadProgress(t.createMosaic.startingJob);
-      const job = await submitJob(mosaic.id);
+      let s3Key: string | undefined;
+      let mosaicId: string | undefined;
 
-      return { mosaic, job };
+      try {
+        // Step 1: Get presigned URL
+        setUploadProgress(t.createMosaic.gettingUploadUrl);
+        let upload_url: string;
+        try {
+          const urlResponse = await getUploadUrl(file.type, file.name);
+          upload_url = urlResponse.upload_url;
+          s3Key = urlResponse.s3_key;
+        } catch (err) {
+          await errorLogger.logStepError(
+            'get_upload_url',
+            'Failed to get presigned upload URL',
+            err,
+            { contentType: file.type }
+          );
+          throw err;
+        }
+
+        // Step 2: Upload file to S3
+        setUploadProgress(t.createMosaic.uploadingImage);
+        try {
+          await uploadFileToS3(file, upload_url);
+        } catch (err) {
+          await errorLogger.logStepError(
+            's3_upload',
+            'Failed to upload image to S3',
+            err,
+            { s3Key }
+          );
+          throw err;
+        }
+
+        // Step 3: Create mosaic record
+        setUploadProgress(t.createMosaic.creatingMosaic);
+        let mosaic;
+        try {
+          mosaic = await createMosaic({
+            title: title || undefined,
+            source_image_path: s3Key,
+            config,
+            tiles_dir: tilesDir,
+          });
+          mosaicId = mosaic.id;
+        } catch (err) {
+          await errorLogger.logStepError(
+            'create_mosaic',
+            'Failed to create mosaic record',
+            err,
+            { s3Key, title }
+          );
+          throw err;
+        }
+
+        // Step 4: Submit job
+        setUploadProgress(t.createMosaic.startingJob);
+        let job;
+        try {
+          job = await submitJob(mosaic.id);
+        } catch (err) {
+          await errorLogger.logStepError(
+            'submit_job',
+            'Failed to submit mosaic generation job',
+            err,
+            { mosaicId, s3Key }
+          );
+          throw err;
+        }
+
+        return { mosaic, job };
+      } catch (err) {
+        // Log the overall failure if we haven't already logged a specific step error
+        // This catches any unexpected errors not in the try/catch blocks above
+        if (!s3Key && !mosaicId) {
+          await errorLogger.logStepError(
+            'unknown',
+            'Unexpected error during mosaic creation',
+            err
+          );
+        }
+        throw err;
+      }
     },
     onSuccess: ({ job }) => {
       navigate(`/job/${job.id}`);
@@ -523,6 +720,22 @@ export function CreateMosaic() {
     if (!imageDimensions) return null;
     return calculateMosaicStats(imageDimensions, config.mode, config.tile_size, config.downsample ?? 1);
   }, [imageDimensions, config.mode, config.tile_size, config.downsample]);
+
+  // Check if mosaic has too many tiles (max 40k for performance)
+  const tileCountValidation = useMemo(() => {
+    if (!mosaicStats) {
+      return { isValid: true, message: null };
+    }
+
+    if (mosaicStats.totalTiles > MAX_TILES) {
+      return {
+        isValid: false,
+        message: `Mosaic would require ${formatNumber(mosaicStats.totalTiles)} tiles, but the maximum is ${formatNumber(MAX_TILES)}. Increase downsample or use a smaller image.`
+      };
+    }
+
+    return { isValid: true, message: null };
+  }, [mosaicStats]);
 
   // Check if no-repeat mode requires more tiles than available
   const noRepeatValidation = useMemo(() => {
@@ -909,6 +1122,23 @@ export function CreateMosaic() {
           </div>
         )}
 
+        {/* Too Many Tiles Validation Warning */}
+        {!tileCountValidation.isValid && (
+          <div className="rounded-md bg-yellow-50 border border-yellow-200 p-4">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <h3 className="text-sm font-medium text-yellow-800">{t.createMosaic.tooManyTiles}</h3>
+                <p className="mt-1 text-sm text-yellow-700">{tileCountValidation.message}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* No-Repeat Validation Warning */}
         {!noRepeatValidation.isValid && (
           <div className="rounded-md bg-yellow-50 border border-yellow-200 p-4">
@@ -958,7 +1188,7 @@ export function CreateMosaic() {
           </button>
           <button
             type="submit"
-            disabled={!file || createMutation.isPending || !noRepeatValidation.isValid || !tileSizeValidation.isValid}
+            disabled={!file || createMutation.isPending || !noRepeatValidation.isValid || !tileSizeValidation.isValid || !tileCountValidation.isValid}
             className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {createMutation.isPending ? t.createMosaic.creating : t.createMosaic.title}
