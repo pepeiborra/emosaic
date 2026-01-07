@@ -890,6 +890,28 @@ export function CreateMosaic() {
           />
         </div>
 
+        {/* Mode */}
+        <div>
+          <label htmlFor="mode" className="block text-sm font-medium text-gray-700 mb-2">
+            {t.createMosaic.matchingMode}
+          </label>
+          <select
+            id="mode"
+            value={config.mode}
+            onChange={(e) => setConfig({ ...config, mode: Number(e.target.value) })}
+            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2 border"
+          >
+            {MODES.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-gray-500">
+            {t.createMosaic.modeHelp}
+          </p>
+        </div>
+
         {/* Tile Size */}
         <div>
           <label htmlFor="tile-size" className="block text-sm font-medium text-gray-700 mb-2">
@@ -934,28 +956,6 @@ export function CreateMosaic() {
           </select>
           <p className="mt-1 text-xs text-gray-500">
             {t.createMosaic.downsampleHelp}
-          </p>
-        </div>
-
-        {/* Mode */}
-        <div>
-          <label htmlFor="mode" className="block text-sm font-medium text-gray-700 mb-2">
-            {t.createMosaic.matchingMode}
-          </label>
-          <select
-            id="mode"
-            value={config.mode}
-            onChange={(e) => setConfig({ ...config, mode: Number(e.target.value) })}
-            className="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2 border"
-          >
-            {MODES.map(({ value, label }) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-          <p className="mt-1 text-xs text-gray-500">
-            {t.createMosaic.modeHelp}
           </p>
         </div>
 
