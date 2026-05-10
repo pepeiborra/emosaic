@@ -131,7 +131,7 @@ Variables (override on the command line, e.g. `make generate FILE=foo.jpeg TILE_
 | `FORCE` | `0` | `1` adds `--force`. |
 | `DOWNSAMPLE` | `1` | Passes through as `--downsample`. |
 | `TITLE` | `Casa del Manco` | HTML title. |
-| `TILES_DIR` | hardcoded iCloud path | Path to tile images. **Note**: the default still points at `/Users/pepe/...` — override with `TILES_DIR=./tiles_dir` (the symlink) or fix the Makefile if your home dir differs. |
+| `TILES_DIR` | `./tiles_dir` | Path to tile images. The default resolves the repo-root `tiles_dir` symlink — re-point that symlink to swap tile sources rather than overriding the variable. |
 | `S3_BUCKET` | `casadelmanco.com` | Used by `upload`/`deploy`. |
 | `DISTRIBUTION_ID` | `E2KW8FQIKWXD1D` | CloudFront distribution to invalidate on `deploy`. |
 
