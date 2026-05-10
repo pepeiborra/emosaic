@@ -28,13 +28,14 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 
-# Build for production using environment-specific .env file
+# Build for production using environment-specific .env file.
+# Always regenerate: the prior approach of "only if missing" silently
+# baked stale CF outputs into the bundle (e.g. shipped without
+# VITE_COGNITO_DOMAIN after Cognito Hosted UI was added).
 echo ""
 ENV_FILE=".env.${ENVIRONMENT}"
-if [ ! -f "$ENV_FILE" ]; then
-    echo "Generating $ENV_FILE..."
-    ./generate-env.sh "$ENVIRONMENT" "$REGION"
-fi
+echo "Generating $ENV_FILE..."
+./generate-env.sh "$ENVIRONMENT" "$REGION"
 
 echo "Building for production with $ENV_FILE..."
 # Copy environment-specific file to .env.production for Vite to use

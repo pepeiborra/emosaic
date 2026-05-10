@@ -338,9 +338,11 @@ else
 fi
 
 if [ "$SKIP_BATCH" = "false" ]; then
-    # Deploy Batch infrastructure
+    # Deploy Batch infrastructure.
+    # Wrap in `if` so the aws CLI's non-zero exit doesn't trip the script's
+    # set -e — we want the failure to be non-fatal so later phases still run.
     echo "🏗️  Deploying Batch infrastructure stack..."
-    aws cloudformation deploy \
+    if aws cloudformation deploy \
         --template-file cloudformation/batch-infrastructure.yaml \
         --stack-name $STACK_BATCH \
         --parameter-overrides \
@@ -349,9 +351,7 @@ if [ "$SKIP_BATCH" = "false" ]; then
             SubnetIds="$SUBNET_IDS" \
             UseExistingECR="$USE_EXISTING_RESOURCES" \
         --capabilities CAPABILITY_NAMED_IAM \
-        --region $REGION
-
-    if [ $? -eq 0 ]; then
+        --region $REGION; then
         echo "✅ Batch infrastructure deployed"
     else
         # Non-fatal: subsequent phases consume Batch's existing CF exports.
