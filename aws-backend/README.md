@@ -1,328 +1,146 @@
-# 🚀 Tile Flagging System - AWS Backend
+# AWS Backend
 
-This directory contains the AWS infrastructure and deployment scripts for the mosaic tile flagging system.
+CloudFormation, Lambdas, and CLI tools for the cloud rendering pipeline + tile-flagging system.
 
-## 📋 Prerequisites
+For the cross-component picture see [`../ARCHITECTURE.md`](../ARCHITECTURE.md). For the deployment runbook see [`../DEPLOYMENT.md`](../DEPLOYMENT.md). This file is the inventory.
 
-- AWS CLI installed and configured
-- Appropriate AWS permissions for:
-  - CloudFormation
-  - DynamoDB
-  - Lambda
-  - API Gateway
-  - IAM
+## Scope
 
-## 🏗️ Infrastructure
+The backend covers:
 
-### Architecture
-```
-Frontend (S3) → API Gateway → Lambda → DynamoDB
-                     ↓
-                Rate Limiting
-```
+- Mosaic CRUD + job orchestration (admin UI talks to this)
+- AWS Batch container runner that actually executes the Rust binary
+- User registration / Cognito user pool
+- Image upload (presigned URLs)
+- Tile flagging (public-facing report-inappropriate-tile API used by the embedded widget)
+- Error logging
+- Admin endpoints
 
-### Resources Created
-- **DynamoDB Tables**:
-  - `prod-tile-flags`: Stores tile flag data
-  - `prod-rate-limits`: Handles rate limiting (TTL enabled)
-- **Lambda Functions**:
-  - `prod-toggle-tile-flag`: Flag/unflag tiles
-  - `prod-get-tile-flags`: Bulk flag retrieval
-  - `prod-admin-get-all-flags`: Admin API for retrieving all flags
-- **API Gateway**: RESTful API with CORS support
-- **IAM Roles**: Proper permissions for Lambda→DynamoDB
+Auth: Cognito JWT for mosaic/user/admin endpoints; tile flagging is public + rate-limited.
 
-## 🚀 Deployment
+## Lambda inventory (24 total)
 
-### Step 1: Deploy Infrastructure
+| Area | Lambda | Path |
+|------|--------|------|
+| Tile flagging (3) | `toggle_flag` | `lambda/toggle_flag.py` |
+| | `get_flags` | `lambda/get_flags.py` |
+| | `admin_get_all_flags` | `lambda/admin_get_all_flags.py` |
+| Mosaic CRUD (5) | `create_mosaic`, `list_mosaics`, `get_mosaic`, `update_mosaic`, `delete_mosaic` | `lambda/mosaic/*.py` |
+| | `set_main_mosaic` | `lambda/mosaic/set_main_mosaic.py` |
+| Jobs (5) | `submit_job`, `list_jobs`, `get_job`, `cancel_job` | `lambda/mosaic/*.py` |
+| | `job_completed` (EventBridge trigger) | `lambda/job_completed.py` |
+| User / auth (4) | `registration`, `user_management`, `captcha`, `custom_message` | `lambda/mosaic/*.py` |
+| Tiles / uploads (4) | `image_upload`, `get_upload_url`, `get_tile_count`, `list_tile_folders` | `lambda/mosaic/*.py` |
+| Errors (2) | `log_error`, `list_errors` | `lambda/mosaic/*.py` |
+
+The mosaic API surface evolves; rather than enumerating endpoints here (they go stale fast), see how the admin UI calls them in `admin-ui/src/` (the API client is the source of truth) and the routes in `cloudformation/mosaic-api.yaml`.
+
+## DynamoDB tables (per environment)
+
+| Table | Purpose |
+|-------|---------|
+| `${env}-tile-flags` | Reported inappropriate tiles. Partition key `tile_hash`; TTL 30 days; GSI `flagged-at-index` for time-ordered admin scan. |
+| `${env}-rate-limits` | Per-IP per-minute counter for tile flagging. Hourly TTL. |
+| `${env}-mosaics` | Mosaic metadata, parameters, status, stats. |
+| `${env}-mosaic-jobs` | Batch job records linked to mosaics; updated by `job_completed`. |
+
+## CloudFormation stacks
+
+In `cloudformation/`:
+
+| Template | Stack name (parameterised) | Provisions |
+|----------|----------------------------|------------|
+| `tile-flags-infrastructure.yaml` | `${env}-tile-flags-infrastructure` | DynamoDB (flags + rate-limits), Lambdas, API Gateway. |
+| `mosaic-infrastructure.yaml` | `${env}-mosaic-infrastructure` | Mosaics/jobs DynamoDB tables, S3 tiles bucket, Cognito user pool. |
+| `job-handler.yaml` | `${env}-job-handler` | EventBridge rule + `job_completed` Lambda. |
+| `batch-infrastructure.yaml` | `${env}-batch-infrastructure` | ECR repo, Batch compute environment, job queue, job definition. |
+| `mosaic-api.yaml` | `${env}-mosaic-api` | API Gateway routes for mosaic + jobs + uploads + Lambdas. |
+| `phase3-enhancements.yaml` | `${env}-phase3-enhancements` | Incremental additions (see `docs/archive/aws-backend/PHASE3_SUMMARY.md`). |
+| `user-management.yaml` | `${env}-user-management` | Cognito triggers, user admin Lambdas. |
+| `image-upload.yaml` | `${env}-image-upload` | Presigned upload URL Lambda + bucket policy. |
+| `domain-certificate.yaml` | `${env}-domain-certificate` | ACM cert (deployed to `us-east-1` regardless of primary region). |
+| `admin-ui-infrastructure.yaml` | `${env}-admin-ui` | S3 + CloudFront for the admin UI. |
+| `api-gateway.yaml` | (referenced indirectly) | Shared API Gateway primitives. |
+
+## Deploy scripts
+
+| Script | Purpose |
+|--------|---------|
+| `deploy-cloud.sh` | **Canonical full-stack deploy.** Reads env vars, deploys all stacks in dependency order. See `DEPLOYMENT.md`. |
+| `deploy.sh` | **Legacy.** Deploys only the tile-flagging stack. Pre-dates the mosaic API. |
+| `deploy-admin-ui.sh` | Build + sync the React app to S3 + invalidate CloudFront. |
+| `cleanup-cloud.sh`, `cleanup_and_redeploy.sh` | Teardown / nuke-and-pave helpers. |
+| `update-api-endpoint.sh` | Patch `mosaic-widget.js` with the deployed API URL (legacy widget). |
+| `test-api.sh`, `test-batch.sh`, `test-phase3.sh` | Smoke tests against a deployed environment. |
+| `list-dynamo-tables-parallel.sh` | Diagnostic / bulk listing helper. |
+
+The Docker image build/push lives at the repo root: `../build-and-push.sh`.
+
+VPC auto-detection: `../find-vpc.sh` is invoked by `deploy-cloud.sh` to pick a default VPC + subnets if `VPC_ID`/`SUBNET_IDS` aren't set.
+
+## Environment variables
+
+Used across deploy scripts and Lambdas:
+
+| Variable | Default | Used by |
+|----------|---------|---------|
+| `ENVIRONMENT` | `prod` | All deploy scripts; prefixes resource names. |
+| `AWS_REGION` | `eu-west-3` (cloud) / `us-east-1` (legacy `deploy.sh`) | All deploy scripts. |
+| `CORS_ORIGIN` | `https://${env}.casadelmanco.com` (or `https://casadelmanco.com` for prod) | `deploy-cloud.sh`, Lambdas. |
+| `ADMIN_EMAIL` | (required for cloud deploy) | `deploy-cloud.sh` — initial Cognito admin user. |
+| `VPC_ID`, `SUBNET_IDS` | auto-detected | `deploy-cloud.sh` (Batch compute env). |
+| `CUSTOM_DOMAIN`, `ROOT_DOMAIN`, `HOSTED_ZONE_ID` | unset | Optional Route 53 + ACM wiring for a custom subdomain. |
+| `USE_EXISTING_RESOURCES`, `EXISTING_TILES_BUCKET` | `true`, `emosaic-tiles-prod` | Reuse existing S3 / IAM where possible. |
+| `CLEAN_FIRST` | `false` | If `true`, delete all stacks before deploying. |
+| `IMAGE_TAG` | `latest` | `build-and-push.sh`. |
+
+Multi-environment guide: [`ENVIRONMENTS.md`](./ENVIRONMENTS.md).
+
+## CLI tools
+
+### `tile_manager.py`
+
+Manage flagged tiles. Requires `pip install -r requirements.txt`.
+
 ```bash
-cd aws-backend
-./deploy.sh
+python tile_manager.py list [--limit N] [--next-key TOKEN] [--format table|json]
+python tile_manager.py review [--batch-size N]    # interactive: open / unflag / delete / continue / quit
+python tile_manager.py delete TILE_HASH ... [--confirm]
 ```
 
-This will:
-1. Package Lambda functions
-2. Deploy CloudFormation stacks
-3. Update Lambda code
-4. Test API endpoints
-5. Output the API Gateway URL
+Global flags: `--environment` (default `prod`), `--region` (default `us-east-1`).
 
-### Step 2: Update Frontend
-```bash
-./update-api-endpoint.sh
-```
+### `user_manager.py`
 
-This automatically updates the `mosaic-widget.js` file with the correct API endpoint.
+Cognito user pool admin (create users, reset passwords, list, etc.). Run `python user_manager.py --help` for the current command list.
 
-### Step 3: Redeploy Frontend
-```bash
-cd ..
-make upload
-```
+### `backfill_image_hashes.py`
 
-## 🔧 Configuration
+One-shot migration utility for back-filling content hashes on existing DynamoDB items. Inspect before running — not idempotent in all branches.
 
-### Environment Variables
-- `ENVIRONMENT`: Deployment environment (default: `prod`)
-- `AWS_REGION`: AWS region (default: `us-east-1`)
-- `CORS_ORIGIN`: Allowed CORS origin (default: `https://casadelmanco.com`)
+## Tile-flagging API quick reference
 
-### Custom Deployment
-```bash
-# Deploy to staging environment
-ENVIRONMENT=staging ./deploy.sh
+Base URL is in the API Gateway output of the `tile-flags-infrastructure` stack.
 
-# Deploy to different region
-AWS_REGION=us-west-2 ./deploy.sh
-
-# Custom CORS origin
-CORS_ORIGIN=https://mydomain.com ./deploy.sh
-```
-
-## 📡 API Endpoints
-
-Base URL: `https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod`
-
-### Flag a Tile
 ```http
-POST /tiles/{tileHash}/flag
-Content-Type: application/json
-
-{
-  "tilePath": "/path/to/tile.jpg"
-}
-```
-
-### Unflag a Tile
-```http
+POST   /tiles/{tileHash}/flag       # body: { "tilePath": "..." }
 DELETE /tiles/{tileHash}/flag
+POST   /tiles/flags                 # body: { "tileHashes": ["...", ...] } — bulk get
+GET    /admin/flags?limit=100&lastKey=...
 ```
 
-### Get Bulk Flags
-```http
-POST /tiles/flags
-Content-Type: application/json
+Rate limits: 10 RPS / 20 burst at API Gateway; per-IP DynamoDB counter in `toggle_flag` Lambda (10 flags/minute).
 
-{
-  "tileHashes": ["hash1", "hash2", ...]
-}
-```
+CloudWatch log groups: `/aws/lambda/${env}-toggle-tile-flag`, `${env}-get-tile-flags`, `${env}-admin-get-all-flags`.
 
-### Admin: Get All Flags
-```http
-GET /admin/flags?limit=100&lastKey=...
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "flags": [
-    {
-      "tileHash": "abc123",
-      "tilePath": "/path/to/tile.jpg",
-      "flaggedAt": "2025-08-27T09:01:50.375576",
-      "flagStatus": "flagged",
-      "ttl": 1758877310
-    }
-  ],
-  "count": 1,
-  "hasMore": false,
-  "nextKey": "eyJ0aWxlX2hhc2giOiAiYWJjMTIzIn0=",
-  "summary": {
-    "total": 1,
-    "today": 1,
-    "thisWeek": 1,
-    "retrievedAt": "2025-08-27T09:06:49.523600Z"
-  }
-}
-```
-
-**Query Parameters:**
-- `limit`: Number of results (default 100, max 1000)
-- `lastKey`: Pagination token for next page
-
-## 🔒 Rate Limiting
-
-- **Client-side**: 10 flags per minute (JavaScript)
-- **Server-side**: DynamoDB-based IP tracking
-- **API Gateway**: 10 RPS baseline, 20 burst
-
-## 📊 Monitoring
-
-### CloudWatch Logs
-- `/aws/lambda/prod-toggle-tile-flag`
-- `/aws/lambda/prod-get-tile-flags`
-- `/aws/lambda/prod-admin-get-all-flags`
-
-### DynamoDB Metrics
-- Read/Write capacity usage
-- Throttled requests
-- Item counts
-
-## 🧪 Testing
-
-### Manual Testing
-```bash
-# Test flagging
-curl -X POST "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/tiles/test123/flag" \
-  -H "Content-Type: application/json" \
-  -d '{"tilePath": "/test/path.jpg"}'
-
-# Test bulk retrieval
-curl -X POST "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/tiles/flags" \
-  -H "Content-Type: application/json" \
-  -d '{"tileHashes": ["test123"]}'
-
-# Test admin API (get all flags)
-curl -X GET "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/admin/flags?limit=10"
-```
-
-### Load Testing
-```bash
-# Install artillery if needed
-npm install -g artillery
-
-# Run load test
-artillery quick --count 10 --num 50 "https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/prod/tiles/flags"
-```
-
-## 🛠️ Troubleshooting
-
-### Common Issues
-
-1. **CORS Errors**
-   - Check the `CORS_ORIGIN` parameter matches your domain
-   - Verify OPTIONS methods are deployed
-
-2. **Rate Limiting Issues**
-   - Check CloudWatch logs for rate limit messages
-   - Monitor DynamoDB `rate-limits` table
-
-3. **Lambda Timeout**
-   - Check CloudWatch logs for timeout errors
-   - Consider increasing timeout in CloudFormation
-
-4. **API Gateway 502/503**
-   - Check Lambda function logs
-   - Verify IAM permissions
-
-### Useful Commands
-```bash
-# Check stack status
-aws cloudformation describe-stacks --stack-name prod-tile-flags-infrastructure
-
-# View Lambda logs
-aws logs tail /aws/lambda/prod-toggle-tile-flag --follow
-
-# Check DynamoDB items
-aws dynamodb scan --table-name prod-tile-flags --region us-east-1 --max-items 10
-```
-
-## 💰 Cost Optimization
-
-- **DynamoDB**: Pay-per-request pricing (cost scales with usage)
-- **Lambda**: Free tier covers ~1M requests/month
-- **API Gateway**: Free tier covers first 1M requests
-- **Estimated cost**: $2-10/month for moderate usage
-
-## 🛠️ CLI Management Tool
-
-A Python CLI tool is provided for managing flagged tiles directly from the command line.
-
-### Installation
+## Cleanup
 
 ```bash
-cd aws-backend
-pip install -r requirements.txt
+ENVIRONMENT=prod ./cleanup-cloud.sh    # tears down all stacks
 ```
 
-### Usage
+This removes data — DynamoDB tables and S3 contents go with it.
 
-```bash
-# List all flagged tiles (default: 100 items)
-python tile_manager.py list
+## Cost
 
-# List with custom limit and output format
-python tile_manager.py list --limit 50 --format json
-
-# List with pagination (use nextKey from previous response)
-python tile_manager.py list --next-key "eyJ0aWxlX2hhc2giOiAiYWJjMTIzIn0="
-
-# Delete specific tiles (with confirmation)
-python tile_manager.py delete abc123 def456 ghi789
-
-# Delete tiles without confirmation prompt
-python tile_manager.py delete abc123 --confirm
-
-# Interactive review of flagged tiles
-python tile_manager.py review
-
-# Review with custom batch size
-python tile_manager.py review --batch-size 20
-
-# Use different environment or region
-python tile_manager.py --environment staging --region us-west-2 list
-```
-
-### Commands
-
-#### `list` - List Flagged Tiles
-- `--limit, -l`: Number of items to return (max 1000, default 100)
-- `--next-key, -n`: Pagination token for next page
-- `--format, -f`: Output format (`table` or `json`, default table)
-
-#### `review` - Interactive Review
-Interactively review flagged tiles one by one with options to:
-- **Open**: View the image file in your default image viewer
-- **Unflag**: Remove the tile from the flagged list (keeps the file)
-- **Delete**: Delete the image file from disk (also unflags it)
-- **Continue**: Skip to the next tile
-- **Quit**: Exit the review session
-
-Options:
-- `--batch-size, -b`: Number of tiles to fetch per batch (default 50)
-
-#### `delete` - Delete Flagged Tiles  
-- `tile_hashes`: One or more tile hashes to delete
-- `--confirm, -y`: Skip confirmation prompt
-
-### Global Options
-- `--environment, -e`: Environment name (default: prod)
-- `--region, -r`: AWS region (default: us-east-1)
-
-### Example Output
-
-```bash
-$ python tile_manager.py list --limit 5
-
-📊 Summary:
-  Total flags: 3
-  Today: 1
-  This week: 2
-  Retrieved at: 2025-08-27T10:30:00Z
-
-🏷️  Flagged Tiles (showing 3 of 3 scanned):
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-Tile Hash            Flagged At                Tile Path                                                     Status    
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-abc123               2025-08-27T09:01:50       /tiles/2019/tile_001.jpg                                     flagged   
-def456               2025-08-26T15:30:25       /tiles/2020/tile_002.jpg                                     flagged   
-ghi789               2025-08-25T12:15:10       /tiles/2021/tile_003.jpg                                     flagged   
-```
-
-## 🧹 Cleanup
-
-```bash
-# Delete all resources
-aws cloudformation delete-stack --stack-name prod-tile-flags-api
-aws cloudformation delete-stack --stack-name prod-tile-flags-infrastructure
-```
-
-## 📝 Next Steps
-
-1. **Admin Panel**: Create web interface using the admin API for reviewing flags
-2. **Authentication**: Add proper authentication/authorization for admin endpoints
-3. **Analytics**: Add metrics for flag patterns and trends
-4. **Notifications**: Alert on high flag volumes
-5. **Auto-moderation**: ML-based automatic flagging
+Pay-per-request DynamoDB + on-demand Lambda + on-demand Batch (Fargate) + small S3/CloudFront. With low usage the maintainer's bill sits around $5–6/month; the dominant variable cost is Batch compute when rendering large mosaics.

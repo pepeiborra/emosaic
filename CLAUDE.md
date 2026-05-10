@@ -4,7 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Project Overview
 
-emosaic is a Rust-based mosaic generator that creates photo mosaics by replacing pixels/regions in a source image with tile images from a collection. It supports multiple rendering modes, web output with interactive features, and includes AWS infrastructure for tile flagging.
+emosaic spans four components:
+
+1. **Rust mosaic generator** (`src/`, binary `emosaic`) — the core engine. Builds locally with nightly Rust, runs identically in the AWS Batch container.
+2. **Container** (`Dockerfile`, `docker/`, `build-and-push.sh`) — multi-stage build that pushes the binary to ECR.
+3. **AWS backend** (`aws-backend/`) — 24 Python Lambdas, 4 DynamoDB tables, API Gateway, Cognito, AWS Batch, EventBridge, CloudFront. Covers mosaic CRUD, job orchestration, tile flagging, user registration.
+4. **Admin UI** (`admin-ui/`) — React 19 + Vite + Tailwind + Amplify (Cognito), deployed to S3/CloudFront.
+
+The deployed instance is **casadelmanco.com**. See `ARCHITECTURE.md` at the repo root for the cross-component picture.
 
 # Build and Development Commands
 
@@ -86,21 +93,67 @@ Key Makefile variables: FILE, TILE_SIZE, MODE, OPACITY, CROP, MORE, TILES_DIR, S
 
 ## AWS Backend (aws-backend/)
 
-Infrastructure for tile flagging system:
-- **DynamoDB**: Stores flagged tiles and rate limiting data
-- **Lambda**: Three functions (toggle-flag, get-flags, admin-get-all-flags)
-- **API Gateway**: RESTful API with CORS
-- **deploy.sh**: Automated deployment script
-- **tile_manager.py**: CLI tool for managing flagged tiles
+Full cloud rendering pipeline plus tile flagging:
 
-Deploy: `cd aws-backend && ./deploy.sh`
+- **24 Python Lambdas**:
+  - 3 tile-flagging (`toggle_flag`, `get_flags`, `admin_get_all_flags`)
+  - 20 mosaic API (`lambda/mosaic/*.py`): `create_mosaic`, `submit_job`, `list_mosaics`, `get_mosaic`, `update_mosaic`, `delete_mosaic`, `set_main_mosaic`, `cancel_job`, `list_jobs`, `get_job`, `image_upload`, `get_upload_url`, `get_tile_count`, `list_tile_folders`, `registration`, `user_management`, `captcha`, `custom_message`, `log_error`, `list_errors`
+  - 1 EventBridge trigger (`job_completed`) — updates DynamoDB and invalidates CloudFront when Batch jobs finish
+- **DynamoDB tables**: `${env}-tile-flags`, `${env}-rate-limits`, `${env}-mosaics`, `${env}-mosaic-jobs`
+- **AWS Batch**: ECR + compute environment + job queue + job definition; runs the Docker-packaged binary
+- **API Gateway**: REST APIs (Cognito auth on admin/user endpoints, public + rate-limited on tile flagging)
+- **Cognito**: `${env}-emosaic-admin-pool`
+- **CloudFormation stacks** (11 templates in `aws-backend/cloudformation/`): `tile-flags-infrastructure`, `mosaic-infrastructure`, `job-handler`, `batch-infrastructure`, `mosaic-api`, `phase3-enhancements`, `user-management`, `image-upload`, `domain-certificate` (us-east-1), `admin-ui-infrastructure`, `api-gateway`
+
+Deploy scripts (in `aws-backend/`):
+
+- `deploy-cloud.sh` — full stack deployment (current canonical script). Env vars: `ENVIRONMENT`, `AWS_REGION`, `ADMIN_EMAIL`, `CORS_ORIGIN`, `VPC_ID`, `SUBNET_IDS`, `CUSTOM_DOMAIN`, `HOSTED_ZONE_ID`, `CLEAN_FIRST`.
+- `deploy.sh` — legacy tile-flagging-only deployment.
+- `cleanup-cloud.sh`, `cleanup_and_redeploy.sh` — teardown helpers.
+- `deploy-admin-ui.sh` — build + ship the React app.
+- `update-api-endpoint.sh` — patches the embedded widget JS with the live API URL.
+- `test-api.sh`, `test-batch.sh`, `test-phase3.sh` — smoke tests.
+
+CLI tools (Python):
+
+- `tile_manager.py` — list/review/delete flagged tiles.
+- `user_manager.py` — Cognito user admin.
+- `backfill_image_hashes.py` — one-shot data migration.
+
+Detailed runbook in `DEPLOYMENT.md` and `aws-backend/README.md`.
+
+## Container (Dockerfile, docker/, build-and-push.sh)
+
+Multi-stage Dockerfile builds the Rust binary (using `rust:1.75-slim` + the pinned nightly toolchain), then bakes it into a `debian:bookworm-slim` runtime with AWS CLI and ImageMagick. `docker/entrypoint.sh` is what AWS Batch actually executes — it sync's tiles from S3, runs `emosaic`, and uploads results.
+
+`./build-and-push.sh` (repo root) builds the image, runs the test suite first, and pushes to the ECR repo created by the `${env}-batch-infrastructure` stack. Env vars: `ENVIRONMENT` (default `prod`), `AWS_REGION` (default `eu-west-3`), `IMAGE_TAG` (default `latest`).
+
+## Admin UI (admin-ui/)
+
+React 19 + TypeScript + Vite + Tailwind v4 + AWS Amplify v6 (Cognito) + TanStack Query v5 + React Router v7.
+
+- `npm run dev` — local dev server (http://localhost:5173)
+- `npm run build` — production build to `dist/`
+- `./generate-env.sh <env> <region>` — populate `.env` from CloudFormation outputs
+- `./deploy.sh` — build + sync to S3 + invalidate CloudFront
+
+Cross-cutting: see `admin-ui/README.md` for env vars and deployment.
 
 ## Entry Point (src/main.rs)
 
-CLI built with clap v3:
-- Main command: prepare tile vs mosaic generation
-- Mosaic subcommand options: mode, tile-size, tint-opacity, no-repeat, greedy, web, extensions, etc.
-- Uses nightly Rust features: `generic_const_exprs`, `type_changing_struct_update`
+CLI built with clap v3. Top-level args apply to both subcommands:
+
+- `<IMG>` (positional, required) — source image
+- `-s, --tile-size <N>` (default `16`)
+- `-o, --output-path <PATH>` (default `./output.jpg`) — note the binary always writes PNG-encoded data regardless of extension
+- `--crop` — crop tiles to square instead of resizing
+
+Subcommands:
+
+- `prepare` — turn the source image into a single tile (preview tile preprocessing)
+- `mosaic <TILES_DIR>` with options: `-m/--mode` (`1|2|3|4|5|6|8|16|32|64|128|random`, default `1`), `-t/--tint-opacity` (0..1), `--no-repeat`, `--greedy`, `--randomize` (0..100), `--downsample`, `--extensions` (default `jpg jpeg`), `--html`, `--web`, `--title`, `-f/--force`
+
+Nightly features used: `generic_const_exprs`, `type_changing_struct_update`. The toolchain is pinned in `rust-toolchain.toml`.
 
 ## Key Design Patterns
 
@@ -125,11 +178,9 @@ CLI built with clap v3:
 
 # Source Control
 
-This project uses sapling (sl):
-- `sl status` - Show changed files
-- `sl diff` - Show changes in patch format
-- `sl commit -m "message"` - Record commit
-- `sl amend` - Amend top commit
+The repo is a git repository. Sapling (`sl`) sits on top of git for some workflows; both are valid:
+- Plain git: `git status`, `git diff`, `git commit -m "..."`, `git log`
+- Sapling (if installed): `sl status`, `sl diff`, `sl commit -m "..."`, `sl amend`
 
 # Best Practices
 

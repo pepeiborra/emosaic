@@ -1,5 +1,7 @@
 # Emosaic Cloud Deployment Guide
 
+For the cross-component picture see [`ARCHITECTURE.md`](./ARCHITECTURE.md). For backend internals (Lambda inventory, stacks, env vars) see [`aws-backend/README.md`](./aws-backend/README.md).
+
 ## Pre-Deployment Checklist
 
 - [ ] AWS CLI installed (`aws --version`)
@@ -32,7 +34,7 @@ This will deploy:
 - ✅ DynamoDB tables (mosaics, jobs)
 - ✅ Cognito User Pool
 - ✅ API Gateway with all endpoints
-- ✅ Lambda functions (11 total)
+- ✅ Lambda functions (24 total: 3 tile-flagging, 20 mosaic API, 1 EventBridge job-completion handler)
 - ✅ EventBridge rules
 - ✅ AWS Batch (ECR, compute environment, job queue)
 
@@ -43,14 +45,13 @@ This will deploy:
 After deployment, build and push the container image:
 
 ```bash
-cd /Users/pepeiborra/scratch/emosaic
+# from the repo root
 ./build-and-push.sh
 ```
 
-This will:
-1. Build the Rust binary in Docker
-2. Create optimized container image
-3. Push to ECR
+This script (at the repo root) runs `cargo test --release` first, then builds the multi-stage Dockerfile (forced to `linux/amd64`), and pushes to the ECR repo created by the `${ENVIRONMENT}-batch-infrastructure` stack.
+
+Env vars: `ENVIRONMENT` (default `prod`), `AWS_REGION` (default `eu-west-3`), `IMAGE_TAG` (default `latest`).
 
 **Time**: ~10-15 minutes (first build), ~2-3 minutes (subsequent)
 

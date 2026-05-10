@@ -1,6 +1,6 @@
 # Emosaic Admin UI
 
-React admin interface for managing photo mosaics.
+React admin interface for managing photo mosaics. For the cross-component picture see [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 ## Prerequisites
 
@@ -66,8 +66,8 @@ This will:
 
 ## Tech Stack
 
-- React 18 + TypeScript
-- Vite
+- React 19 + TypeScript
+- Vite 7
 - Tailwind CSS v4
 - AWS Amplify v6 (Cognito auth)
 - TanStack Query v5 (data fetching)
