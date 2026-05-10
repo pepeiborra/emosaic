@@ -97,6 +97,13 @@ pub fn prepare_tile(
                     if let Ok(img) = ::image::open(&cache_path) {
                         return Ok(img.to_rgb8());
                     }
+                    // Local miss for an indexed entry: try S3 before falling
+                    // through to the slow path's full file read + hash.
+                    if try_s3_pull(&known_md5, crop, tile_size, &cache_path) {
+                        if let Ok(img) = ::image::open(&cache_path) {
+                            return Ok(img.to_rgb8());
+                        }
+                    }
                 }
             }
         }
@@ -136,12 +143,28 @@ pub fn prepare_tile(
             )),
         })
     } else if let Some((_, cache_path)) = &cache_paths {
-        ::image::open(cache_path)
-            .map_err(|e| ImageError {
+        let local = ::image::open(cache_path).map(|img| img.to_rgb8());
+        if local.is_ok() {
+            local.map_err(|e| ImageError {
                 path: path.to_owned(),
                 error: e,
             })
-            .map(|img| img.to_rgb8())
+        } else if try_s3_pull(&content_hash.0, crop, tile_size, cache_path) {
+            ::image::open(cache_path)
+                .map_err(|e| ImageError {
+                    path: path.to_owned(),
+                    error: e,
+                })
+                .map(|img| img.to_rgb8())
+        } else {
+            Err(ImageError {
+                path: path.to_owned(),
+                error: ::image::ImageError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "local cache miss; S3 miss or disabled",
+                )),
+            })
+        }
     } else {
         Err(ImageError {
             path: path.to_owned(),
@@ -263,6 +286,9 @@ pub fn prepare_tile(
                 .and_then(|_| tile_img.save(cache_path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
             {
                 warn_once_cache_write_failed(cache_dir, &e);
+            } else {
+                // Best-effort write-through to S3; never fatal.
+                try_s3_push(&content_hash.0, crop, tile_size, cache_path);
             }
         }
         Ok(tile_img.into())
@@ -385,6 +411,146 @@ fn update_index(path: &Path, key: (u64, u64), md5: [u8; 16]) {
                 md5,
             },
         );
+    }
+}
+
+// ===== Optional S3-backed Cache 1 =====
+//
+// When `EMOSAIC_S3_CACHE_BUCKET` is set, a remote layer sits behind the
+// local per-tile cache. Read flow on local miss: try S3 GET → write bytes
+// to the local cache path → caller decodes from disk. Write flow: after
+// the local cache write succeeds, also PUT to S3.
+//
+// All S3 operations are best-effort. Errors emit a one-shot warning and
+// fall through to the existing local-only behavior — the binary never
+// fails because S3 is misbehaving.
+
+struct S3Handle {
+    runtime: tokio::runtime::Runtime,
+    client: aws_sdk_s3::Client,
+    bucket: String,
+    prefix: String,
+}
+
+static S3_HANDLE: OnceLock<Option<S3Handle>> = OnceLock::new();
+static WARN_S3_INIT: Once = Once::new();
+static WARN_S3_PULL: Once = Once::new();
+static WARN_S3_PUSH: Once = Once::new();
+
+fn s3_handle() -> Option<&'static S3Handle> {
+    S3_HANDLE
+        .get_or_init(|| {
+            let bucket = std::env::var("EMOSAIC_S3_CACHE_BUCKET")
+                .ok()
+                .filter(|s| !s.is_empty())?;
+            let prefix = std::env::var("EMOSAIC_S3_CACHE_PREFIX")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "cache/v2/".to_string());
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    WARN_S3_INIT.call_once(|| {
+                        eprintln!("⚠️  S3 cache disabled: tokio runtime init failed: {}", e);
+                    });
+                    return None;
+                }
+            };
+            let config = runtime.block_on(
+                aws_config::defaults(aws_config::BehaviorVersion::latest()).load(),
+            );
+            let client = aws_sdk_s3::Client::new(&config);
+            Some(S3Handle {
+                runtime,
+                client,
+                bucket,
+                prefix,
+            })
+        })
+        .as_ref()
+}
+
+fn s3_key(prefix: &str, md5: &[u8; 16], crop: bool, tile_size: u32) -> String {
+    format!(
+        "{}{}{}.v{}.{}.png",
+        prefix,
+        hex_md5(md5),
+        if crop { "_cropped" } else { "" },
+        PREPARE_TILE_CACHE_VERSION,
+        tile_size
+    )
+}
+
+/// Try to populate `local_path` from S3. Returns true on success.
+/// Any error (including bucket disabled, NoSuchKey, network) returns false.
+fn try_s3_pull(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) -> bool {
+    let h = match s3_handle() {
+        Some(h) => h,
+        None => return false,
+    };
+    let key = s3_key(&h.prefix, md5, crop, tile_size);
+    let bytes_result = h.runtime.block_on(async {
+        let resp = h
+            .client
+            .get_object()
+            .bucket(&h.bucket)
+            .key(&key)
+            .send()
+            .await
+            .ok()?;
+        resp.body.collect().await.ok().map(|b| b.into_bytes())
+    });
+    let bytes = match bytes_result {
+        Some(b) => b,
+        None => return false,
+    };
+    if let Some(parent) = local_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(local_path, &bytes) {
+        Ok(()) => true,
+        Err(e) => {
+            WARN_S3_PULL.call_once(|| {
+                eprintln!(
+                    "⚠️  S3 cache: pulled {} but couldn't write {}: {}",
+                    key,
+                    local_path.display(),
+                    e
+                );
+            });
+            false
+        }
+    }
+}
+
+/// Best-effort PUT of `local_path` contents to S3. Failures are logged once.
+fn try_s3_push(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) {
+    let h = match s3_handle() {
+        Some(h) => h,
+        None => return,
+    };
+    let key = s3_key(&h.prefix, md5, crop, tile_size);
+    let bytes = match std::fs::read(local_path) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    let res = h.runtime.block_on(async {
+        h.client
+            .put_object()
+            .bucket(&h.bucket)
+            .key(&key)
+            .body(bytes.into())
+            .content_type("image/png")
+            .send()
+            .await
+    });
+    if let Err(e) = res {
+        WARN_S3_PUSH.call_once(|| {
+            eprintln!("⚠️  S3 cache PUT failed for {}: {}", key, e);
+        });
     }
 }
 

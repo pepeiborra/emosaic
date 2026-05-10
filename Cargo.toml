@@ -28,3 +28,6 @@ itertools = "*"
 kamadak-exif = "*"
 regex = "1"
 backtrace-on-stack-overflow = "*"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = { version = "1", features = ["behavior-version-latest"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }

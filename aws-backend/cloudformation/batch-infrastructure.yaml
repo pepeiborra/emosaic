@@ -272,6 +272,16 @@ Resources:
             Value: 'Ref::CROP'
           - Name: RANDOMIZE
             Value: 'Ref::RANDOMIZE'
+          # Persistent S3-backed Cache 1 for prepared tiles. Reuses the tiles
+          # bucket; the existing S3Access policy already covers GetObject /
+          # PutObject under any prefix in this bucket.
+          - Name: EMOSAIC_S3_CACHE_BUCKET
+            Value: !ImportValue
+              Fn::Sub: '${Environment}-emosaic-tiles-bucket'
+          - Name: EMOSAIC_S3_CACHE_PREFIX
+            Value: 'cache/v2/'
+          - Name: AWS_REGION
+            Value: !Ref AWS::Region
         LogConfiguration:
           LogDriver: awslogs
           Options:
