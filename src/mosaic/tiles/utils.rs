@@ -45,6 +45,15 @@ pub fn flipped_coords<A, const N: usize>(coords: &mut [A; N]) {
     }
 }
 
+/// Schema version for the per-tile cache filename. Bump this whenever the
+/// preprocessing logic in `prepare_tile` changes in a way that should
+/// invalidate previously-cached entries (white-trim threshold, EXIF rotation
+/// handling, resize filter, output format, etc.).
+///
+/// The value is embedded in the cache filename as `.v<N>.`. Old entries
+/// from prior versions are simply ignored on lookup.
+const PREPARE_TILE_CACHE_VERSION: u32 = 2;
+
 /// Prepare a tile image by resizing, cropping, and caching it, and extract date information.
 pub fn prepare_tile_with_date(
     path: &Path,
@@ -106,9 +115,10 @@ pub fn prepare_tile(
     let cache_paths: Option<(PathBuf, PathBuf)> = dirs::cache_dir().map(|d| {
         let cache_dir = d.join("mosaic");
         let cache_path = cache_dir.join(format!(
-            "{:x}{}.{}.png",
+            "{:x}{}.v{}.{}.png",
             content_hash,
             if crop { "_cropped" } else { "" },
+            PREPARE_TILE_CACHE_VERSION,
             tile_size
         ));
         (cache_dir, cache_path)
@@ -309,9 +319,10 @@ fn index_path() -> Option<PathBuf> {
 fn cache_path_for(md5: [u8; 16], crop: bool, tile_size: u32) -> Option<PathBuf> {
     dirs::cache_dir().map(|d| {
         d.join("mosaic").join(format!(
-            "{}{}.{}.png",
+            "{}{}.v{}.{}.png",
             hex_md5(&md5),
             if crop { "_cropped" } else { "" },
+            PREPARE_TILE_CACHE_VERSION,
             tile_size
         ))
     })
