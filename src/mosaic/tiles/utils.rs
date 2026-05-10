@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Div;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Once, OnceLock, RwLock};
 use std::time::UNIX_EPOCH;
 
@@ -436,6 +437,18 @@ static S3_HANDLE: OnceLock<Option<S3Handle>> = OnceLock::new();
 static WARN_S3_INIT: Once = Once::new();
 static WARN_S3_PULL: Once = Once::new();
 static WARN_S3_PUSH: Once = Once::new();
+static S3_PUT_COUNT: AtomicU64 = AtomicU64::new(0);
+static S3_PUT_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Returns `(successful PUTs, bytes uploaded)` for the S3-backed cache layer
+/// since the process started. Both are zero when the layer is disabled or
+/// nothing has been pushed yet.
+pub fn s3_put_stats() -> (u64, u64) {
+    (
+        S3_PUT_COUNT.load(Ordering::Relaxed),
+        S3_PUT_BYTES.load(Ordering::Relaxed),
+    )
+}
 
 fn s3_handle() -> Option<&'static S3Handle> {
     S3_HANDLE
@@ -537,6 +550,7 @@ fn try_s3_push(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) {
         Ok(b) => b,
         Err(_) => return,
     };
+    let bytes_len = bytes.len() as u64;
     let res = h.runtime.block_on(async {
         h.client
             .put_object()
@@ -547,10 +561,16 @@ fn try_s3_push(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) {
             .send()
             .await
     });
-    if let Err(e) = res {
-        WARN_S3_PUSH.call_once(|| {
-            eprintln!("⚠️  S3 cache PUT failed for {}: {}", key, e);
-        });
+    match res {
+        Ok(_) => {
+            S3_PUT_COUNT.fetch_add(1, Ordering::Relaxed);
+            S3_PUT_BYTES.fetch_add(bytes_len, Ordering::Relaxed);
+        }
+        Err(e) => {
+            WARN_S3_PUSH.call_once(|| {
+                eprintln!("⚠️  S3 cache PUT failed for {}: {}", key, e);
+            });
+        }
     }
 }
 

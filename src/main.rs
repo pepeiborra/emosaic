@@ -22,7 +22,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
 use mosaic::stats::MosaicConfig;
 use mosaic::tiles::{
-    persist_tile_index, prepare_tile, prepare_tile_with_date, read_tileset_from_file,
+    persist_tile_index, prepare_tile, prepare_tile_with_date, read_tileset_from_file, s3_put_stats,
     write_tileset_to_file, Tile, TileSet,
 };
 use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
@@ -276,6 +276,24 @@ fn print_runtime_stats(start_time: Instant, memory_monitor: &MemoryMonitor) {
     if total_secs >= 1.0 {
         eprintln!("   Peak memory usage: {} MB", memory_monitor.get_peak_mb());
     }
+}
+
+/// Compose the running message for the analysis progress bar from the
+/// current error count and S3 cache PUT stats.
+fn analysis_message(errs: usize, s3_stats: (u64, u64)) -> String {
+    let (puts, bytes) = s3_stats;
+    let mut s = String::from("Analysing");
+    if errs > 0 {
+        s.push_str(&format!(" ({} errors)", errs));
+    }
+    if puts > 0 {
+        s.push_str(&format!(
+            " | S3: {} PUTs, {:.1} MB",
+            puts,
+            bytes as f64 / 1_048_576.0
+        ));
+    }
+    s
 }
 
 /// Validates that the tile size is reasonable and divisible by required dimensions
@@ -806,8 +824,27 @@ where
         );
 
     let errors: RwLock<Vec<ImageError>> = RwLock::new(vec![]);
-    let pb_for_inspect = pb.clone();
-    let err_count = std::sync::atomic::AtomicUsize::new(0);
+    let pb_for_inc = pb.clone();
+    let err_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let err_for_inspect = err_count.clone();
+
+    // Background ticker: composes the bar's message from current error count
+    // and S3 PUT stats every 500 ms. A single source of message updates
+    // avoids races between the rayon inspect closure and the ticker.
+    let stop_ticker = Arc::new(AtomicBool::new(false));
+    let pb_for_ticker = pb.clone();
+    let err_for_ticker = err_count.clone();
+    let stop_for_ticker = stop_ticker.clone();
+    let ticker_handle = thread::spawn(move || {
+        while !stop_for_ticker.load(Ordering::Relaxed) {
+            pb_for_ticker.set_message(analysis_message(
+                err_for_ticker.load(Ordering::Relaxed),
+                s3_put_stats(),
+            ));
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
+
     let tile_data: Vec<_> = images_paths
         .into_par_iter()
         .map(|path| {
@@ -816,10 +853,9 @@ where
         })
         .inspect(|(_, r)| {
             if r.is_err() {
-                let n = err_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                pb_for_inspect.set_message(format!("Analysing ({} errors)", n));
+                err_for_inspect.fetch_add(1, Ordering::Relaxed);
             }
-            pb_for_inspect.inc(1);
+            pb_for_inc.inc(1);
         })
         .filter_map(|x| match x {
             (path, Ok((img, date_taken))) => Some((path, img, date_taken)),
@@ -833,17 +869,24 @@ where
             }
         })
         .collect();
-    let final_errs = err_count.load(std::sync::atomic::Ordering::Relaxed);
-    let suffix = if final_errs > 0 {
-        format!(" ({} errors)", final_errs)
-    } else {
-        String::new()
-    };
-    pb.finish_with_message(format!(
-        "✓ Analysed {} tiles{}",
-        tile_data.len(),
-        suffix
-    ));
+
+    stop_ticker.store(true, Ordering::Relaxed);
+    let _ = ticker_handle.join();
+
+    let final_errs = err_count.load(Ordering::Relaxed);
+    let (puts, bytes) = s3_put_stats();
+    let mut suffix = String::new();
+    if final_errs > 0 {
+        suffix.push_str(&format!(" ({} errors)", final_errs));
+    }
+    if puts > 0 {
+        suffix.push_str(&format!(
+            " | S3: {} PUTs, {:.1} MB",
+            puts,
+            bytes as f64 / 1_048_576.0
+        ));
+    }
+    pb.finish_with_message(format!("✓ Analysed {} tiles{}", tile_data.len(), suffix));
 
     let dates = tile_data
         .iter()
