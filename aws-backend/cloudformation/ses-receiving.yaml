@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: |
+  SES Receiving + Lambda forwarder for casadelmanco.com inbound mail.
+
+  Deploy region MUST be eu-west-1 (SES inbound is not supported in
+  eu-west-3). After the stack creates the receipt rule set, you must
+  activate it manually — CloudFormation can't set the active rule set:
+
+      AWS_PROFILE=admin aws ses set-active-receipt-rule-set \
+        --rule-set-name prod-casadelmanco-inbound \
+        --region eu-west-1
+
+  Required DNS records on Route53 (must be added before deploy):
+    - _amazonses.casadelmanco.com TXT must contain the eu-west-1 token
+    - 3x CNAME for eu-west-1 DKIM tokens
+    - MX casadelmanco.com -> 10 inbound-smtp.eu-west-1.amazonaws.com
+    - SPF (TXT casadelmanco.com -> "v=spf1 include:amazonses.com ~all")
+      (optional but recommended for deliverability)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'prod'
+
+  Domain:
+    Type: String
+    Default: 'casadelmanco.com'
+
+  Recipients:
+    Type: CommaDelimitedList
+    Default: 'privacidad@casadelmanco.com'
+    Description: Addresses that the receipt rule matches; everything else is dropped by SES default-no-action.
+
+  ForwardTo:
+    Type: String
+    Description: Real mailbox to forward incoming mail to (e.g. you@gmail.com).
+
+  FromAddress:
+    Type: String
+    Default: 'noreply@casadelmanco.com'
+    Description: 'From address used when re-sending the forwarded mail (must be a verified sender in the same region as the outbound SES)'
+
+Resources:
+
+  IncomingMailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${Environment}-casadelmanco-incoming-mail'
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-after-30-days
+            Status: Enabled
+            ExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Allow SES to write incoming mail into the bucket; scoped to this account.
+  IncomingMailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref IncomingMailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSESPuts
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${IncomingMailBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref AWS::AccountId
+
+  ForwarderLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-ses-forwarder-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ReadIncomingMail
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub '${IncomingMailBucket.Arn}/*'
+        - PolicyName: SendForwardedMail
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ses:SendRawEmail
+                Resource: '*'
+
+  ForwarderFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-ses-forwarder'
+      Runtime: python3.11
+      Handler: forwarder.lambda_handler
+      Role: !GetAtt ForwarderLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replaced by deploy step
+          def lambda_handler(event, context):
+              return {'status': 'placeholder'}
+      Environment:
+        Variables:
+          FORWARD_TO: !Ref ForwardTo
+          MAIL_BUCKET: !Ref IncomingMailBucket
+          FROM_ADDRESS: !Ref FromAddress
+      Timeout: 30
+      Tags:
+        - Key: Project
+          Value: Emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
+  # SES must be allowed to invoke the lambda (account-scoped).
+  ForwarderInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ForwarderFunction
+      Action: lambda:InvokeFunction
+      Principal: ses.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+  InboundRuleSet:
+    Type: AWS::SES::ReceiptRuleSet
+    Properties:
+      RuleSetName: !Sub '${Environment}-casadelmanco-inbound'
+
+  # Stores each incoming mail in S3, then invokes the forwarder lambda.
+  ForwardingRule:
+    Type: AWS::SES::ReceiptRule
+    DependsOn:
+      - IncomingMailBucketPolicy
+      - ForwarderInvokePermission
+    Properties:
+      RuleSetName: !Ref InboundRuleSet
+      Rule:
+        Name: forward-to-mailbox
+        Enabled: true
+        ScanEnabled: true
+        TlsPolicy: Optional
+        Recipients: !Ref Recipients
+        Actions:
+          - S3Action:
+              BucketName: !Ref IncomingMailBucket
+          - LambdaAction:
+              FunctionArn: !GetAtt ForwarderFunction.Arn
+              InvocationType: Event
+
+Outputs:
+  ForwarderFunctionName:
+    Description: Name of the forwarder Lambda function (used by deploy script to push code updates)
+    Value: !Ref ForwarderFunction
+    Export:
+      Name: !Sub '${Environment}-ses-forwarder-function'
+
+  IncomingMailBucketName:
+    Value: !Ref IncomingMailBucket
+
+  RuleSetName:
+    Description: Activate this rule set with `aws ses set-active-receipt-rule-set --rule-set-name <this>`
+    Value: !Ref InboundRuleSet
