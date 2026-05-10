@@ -22,8 +22,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
 use mosaic::stats::MosaicConfig;
 use mosaic::tiles::{
-    persist_tile_index, prepare_tile, prepare_tile_with_date, read_tileset_from_file, s3_put_stats,
-    write_tileset_to_file, Tile, TileSet,
+    persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_with_date,
+    read_tileset_from_file, s3_put_stats, write_tileset_to_file, Tile, TileSet,
 };
 use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -279,19 +279,26 @@ fn print_runtime_stats(start_time: Instant, memory_monitor: &MemoryMonitor) {
 }
 
 /// Compose the running message for the analysis progress bar from the
-/// current error count and S3 cache PUT stats.
-fn analysis_message(errs: usize, s3_stats: (u64, u64)) -> String {
+/// current error count, S3 cache PUT stats, and CPU/S3 phase-time ratio.
+fn analysis_message(errs: usize, s3_stats: (u64, u64), phase: (u64, u64)) -> String {
     let (puts, bytes) = s3_stats;
+    let (cpu_ns, s3_ns) = phase;
     let mut s = String::from("Analysing");
     if errs > 0 {
         s.push_str(&format!(" ({} errors)", errs));
     }
     if puts > 0 {
         s.push_str(&format!(
-            " | S3: {} PUTs, {:.1} MB",
+            " | S3: {} PUTs {:.1} MB",
             puts,
             bytes as f64 / 1_048_576.0
         ));
+    }
+    let total_ns = cpu_ns + s3_ns;
+    if total_ns > 0 {
+        let cpu_pct = 100.0 * cpu_ns as f64 / total_ns as f64;
+        let s3_pct = 100.0 * s3_ns as f64 / total_ns as f64;
+        s.push_str(&format!(" | CPU {:.0}% / S3 {:.0}%", cpu_pct, s3_pct));
     }
     s
 }
@@ -840,6 +847,7 @@ where
             pb_for_ticker.set_message(analysis_message(
                 err_for_ticker.load(Ordering::Relaxed),
                 s3_put_stats(),
+                phase_time_ns(),
             ));
             thread::sleep(Duration::from_millis(500));
         }
@@ -875,6 +883,7 @@ where
 
     let final_errs = err_count.load(Ordering::Relaxed);
     let (puts, bytes) = s3_put_stats();
+    let (cpu_ns, s3_ns) = phase_time_ns();
     let mut suffix = String::new();
     if final_errs > 0 {
         suffix.push_str(&format!(" ({} errors)", final_errs));
@@ -884,6 +893,16 @@ where
             " | S3: {} PUTs, {:.1} MB",
             puts,
             bytes as f64 / 1_048_576.0
+        ));
+    }
+    let total_ns = cpu_ns + s3_ns;
+    if total_ns > 0 {
+        suffix.push_str(&format!(
+            " | CPU {:.0}% / S3 {:.0}% (cpu={:.1}s s3={:.1}s)",
+            100.0 * cpu_ns as f64 / total_ns as f64,
+            100.0 * s3_ns as f64 / total_ns as f64,
+            cpu_ns as f64 / 1e9,
+            s3_ns as f64 / 1e9
         ));
     }
     pb.finish_with_message(format!("✓ Analysed {} tiles{}", tile_data.len(), suffix));

@@ -1,9 +1,10 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Div;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Once, OnceLock, RwLock};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use ::image::imageops;
 use ::image::Rgb;
@@ -111,6 +112,13 @@ pub fn prepare_tile(
     }
 
     // === Slow path: read full bytes, hash, and (re)populate the index.
+    // Wall-clock the entire slow path via a Drop guard; we subtract the
+    // thread-local S3 duration (accumulated by record_s3_dur) to get the
+    // CPU-only contribution before adding to the global CPU_NS counter.
+    THREAD_S3_DUR.with(|c| c.set(Duration::ZERO));
+    let _cpu_timer = CpuTimerGuard {
+        start: Instant::now(),
+    };
     let bytes = std::fs::read(path).map_err(|e| ImageError {
         path: path.to_owned(),
         error: e.into(),
@@ -439,6 +447,36 @@ static WARN_S3_PULL: Once = Once::new();
 static WARN_S3_PUSH: Once = Once::new();
 static S3_PUT_COUNT: AtomicU64 = AtomicU64::new(0);
 static S3_PUT_BYTES: AtomicU64 = AtomicU64::new(0);
+static CPU_NS: AtomicU64 = AtomicU64::new(0);
+static S3_NS: AtomicU64 = AtomicU64::new(0);
+
+thread_local! {
+    /// Per-thread accumulator for time spent in S3 calls during the current
+    /// `prepare_tile` slow-path execution. The slow path resets this on entry
+    /// and reads it on exit to compute the CPU-only contribution.
+    static THREAD_S3_DUR: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+}
+
+fn record_s3_dur(d: Duration) {
+    S3_NS.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
+    THREAD_S3_DUR.with(|cell| cell.set(cell.get() + d));
+}
+
+/// RAII guard that accumulates CPU-only time (wall − S3) into CPU_NS on
+/// drop. Constructed at the start of `prepare_tile`'s slow path; the drop
+/// fires on any exit point including early `?` returns.
+struct CpuTimerGuard {
+    start: Instant,
+}
+
+impl Drop for CpuTimerGuard {
+    fn drop(&mut self) {
+        let wall = self.start.elapsed();
+        let s3 = THREAD_S3_DUR.with(|c| c.get());
+        let cpu = wall.saturating_sub(s3);
+        CPU_NS.fetch_add(cpu.as_nanos() as u64, Ordering::Relaxed);
+    }
+}
 
 /// Returns `(successful PUTs, bytes uploaded)` for the S3-backed cache layer
 /// since the process started. Both are zero when the layer is disabled or
@@ -447,6 +485,17 @@ pub fn s3_put_stats() -> (u64, u64) {
     (
         S3_PUT_COUNT.load(Ordering::Relaxed),
         S3_PUT_BYTES.load(Ordering::Relaxed),
+    )
+}
+
+/// Returns `(cpu_ns, s3_ns)` — cumulative time, summed across all rayon
+/// threads, spent in CPU prep work vs S3 calls during `prepare_tile` slow
+/// paths. Use the ratio to tell whether a long warm-up run is CPU- or
+/// network-bound.
+pub fn phase_time_ns() -> (u64, u64) {
+    (
+        CPU_NS.load(Ordering::Relaxed),
+        S3_NS.load(Ordering::Relaxed),
     )
 }
 
@@ -505,6 +554,7 @@ fn try_s3_pull(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) ->
         None => return false,
     };
     let key = s3_key(&h.prefix, md5, crop, tile_size);
+    let t = Instant::now();
     let bytes_result = h.runtime.block_on(async {
         let resp = h
             .client
@@ -516,6 +566,7 @@ fn try_s3_pull(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) ->
             .ok()?;
         resp.body.collect().await.ok().map(|b| b.into_bytes())
     });
+    record_s3_dur(t.elapsed());
     let bytes = match bytes_result {
         Some(b) => b,
         None => return false,
@@ -551,6 +602,7 @@ fn try_s3_push(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) {
         Err(_) => return,
     };
     let bytes_len = bytes.len() as u64;
+    let t = Instant::now();
     let res = h.runtime.block_on(async {
         h.client
             .put_object()
@@ -561,6 +613,7 @@ fn try_s3_push(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) {
             .send()
             .await
     });
+    record_s3_dur(t.elapsed());
     match res {
         Ok(_) => {
             S3_PUT_COUNT.fetch_add(1, Ordering::Relaxed);
