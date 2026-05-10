@@ -10,6 +10,9 @@ Provides API endpoints for user self-registration with admin approval:
 
 import json
 import os
+import string
+import secrets
+import urllib.parse
 import uuid
 import time
 import re
@@ -263,12 +266,89 @@ def list_pending_registrations():
         return {'registrations': [], 'count': 0, 'error': str(e)}
 
 
+def generate_initial_password():
+    """Generate a 20-char password that satisfies any reasonable Cognito policy.
+
+    Guarantees one uppercase, one lowercase, one digit, and one safe symbol,
+    so it passes both length-only and full-composition password policies.
+    """
+    safe_symbols = '!@#$%*-_'
+    pool = string.ascii_letters + string.digits + safe_symbols
+    chars = [
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.digits),
+        secrets.choice(safe_symbols),
+    ] + [secrets.choice(pool) for _ in range(16)]
+    secrets.SystemRandom().shuffle(chars)
+    return ''.join(chars)
+
+
+def send_welcome_email(email, name, password):
+    """Send the approved user a magic-link login email via SES."""
+    login_url = (
+        f"{ADMIN_PANEL_URL}"
+        f"?u={urllib.parse.quote(email, safe='')}"
+        f"&p={urllib.parse.quote(password, safe='')}"
+    )
+
+    subject = "Bienvenido/a al Panel de Administracion - Casa del Manco"
+    body_text = f"""Hola {name},
+
+Tu solicitud de acceso al Panel de Administracion de Casa del Manco ha sido aprobada.
+
+Haz clic en el siguiente enlace para iniciar sesion:
+{login_url}
+
+Si el enlace no funciona, puedes iniciar sesion manualmente en {ADMIN_PANEL_URL} con:
+- Usuario: {email}
+- Contrasena: {password}
+
+Puedes cambiar tu contrasena en cualquier momento desde el enlace "Olvide mi contrasena".
+
+Saludos,
+Casa del Manco"""
+
+    body_html = f"""<html>
+<body>
+<p>Hola {name},</p>
+<p>Tu solicitud de acceso al Panel de Administracion de Casa del Manco ha sido aprobada.</p>
+<p><a href="{login_url}">Haz clic aqui para iniciar sesion</a></p>
+<p>Si el enlace no funciona, puedes iniciar sesion manualmente en <a href="{ADMIN_PANEL_URL}">{ADMIN_PANEL_URL}</a> con:</p>
+<ul>
+<li><strong>Usuario:</strong> {email}</li>
+<li><strong>Contrasena:</strong> <code>{password}</code></li>
+</ul>
+<p>Puedes cambiar tu contrasena en cualquier momento desde el enlace "Olvide mi contrasena".</p>
+<hr>
+<p><small>Saludos,<br>Casa del Manco</small></p>
+</body>
+</html>"""
+
+    ses.send_email(
+        Source=ADMIN_EMAIL_FROM,
+        Destination={'ToAddresses': [email]},
+        Message={
+            'Subject': {'Data': subject, 'Charset': 'UTF-8'},
+            'Body': {
+                'Text': {'Data': body_text, 'Charset': 'UTF-8'},
+                'Html': {'Data': body_html, 'Charset': 'UTF-8'}
+            }
+        }
+    )
+
+
 def approve_registration(registration_id):
-    """Approve a registration and create Cognito user."""
+    """Approve a registration and create Cognito user.
+
+    Creates the user with a permanent password we generate, suppresses
+    Cognito's invitation email, and sends our own magic-link email. This
+    skips the NEW_PASSWORD_REQUIRED flow on first login — the user clicks
+    the link and lands directly in the admin panel.
+    """
     table = dynamodb.Table(PENDING_REGISTRATIONS_TABLE)
 
     try:
-        # Get the registration
         result = table.get_item(Key={'id': registration_id})
         item = result.get('Item')
 
@@ -280,8 +360,8 @@ def approve_registration(registration_id):
 
         email = item['email']
         name = item['name']
+        password = generate_initial_password()
 
-        # Create Cognito user
         try:
             cognito.admin_create_user(
                 UserPoolId=USER_POOL_ID,
@@ -291,13 +371,20 @@ def approve_registration(registration_id):
                     {'Name': 'email_verified', 'Value': 'true'},
                     {'Name': 'name', 'Value': name}
                 ],
-                DesiredDeliveryMediums=['EMAIL']
+                MessageAction='SUPPRESS'
             )
         except cognito.exceptions.UsernameExistsException:
-            # User already exists, update status anyway
             pass
 
-        # Update registration status
+        cognito.admin_set_user_password(
+            UserPoolId=USER_POOL_ID,
+            Username=email,
+            Password=password,
+            Permanent=True
+        )
+
+        send_welcome_email(email, name, password)
+
         table.update_item(
             Key={'id': registration_id},
             UpdateExpression='SET #status = :status, approved_at = :approved_at',
@@ -310,7 +397,7 @@ def approve_registration(registration_id):
 
         return {
             'success': True,
-            'message': f'Registration approved. Invitation email sent to {email}'
+            'message': f'Registration approved. Welcome email sent to {email}'
         }
 
     except ClientError as e:
