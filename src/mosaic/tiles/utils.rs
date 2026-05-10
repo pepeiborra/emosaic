@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Div;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Once;
 
 use ::image::imageops;
 use ::image::Rgb;
@@ -66,6 +67,10 @@ pub fn prepare_tile_with_date(
 /// When `force` is true, the on-disk cache entry is bypassed (but still overwritten
 /// with the freshly-prepared image). Use this to invalidate stale cache entries after
 /// modifying tile contents in place.
+///
+/// The on-disk cache is treated as a best-effort optimization: if the cache directory
+/// can't be located or written to, a one-shot warning is emitted to stderr and the
+/// function still returns the prepared tile.
 pub fn prepare_tile(
     path: &Path,
     tile_size: u32,
@@ -77,13 +82,19 @@ pub fn prepare_tile(
         path: path.to_owned(),
         error: e.into(),
     })?);
-    let cache_dir = dirs::cache_dir().unwrap().join("mosaic");
-    let cache_path = cache_dir.join(format!(
-        "{:x}{}.{}.jpg",
-        content_hash,
-        if crop { "_cropped" } else { "" },
-        tile_size
-    ));
+    let cache_paths: Option<(PathBuf, PathBuf)> = dirs::cache_dir().map(|d| {
+        let cache_dir = d.join("mosaic");
+        let cache_path = cache_dir.join(format!(
+            "{:x}{}.{}.jpg",
+            content_hash,
+            if crop { "_cropped" } else { "" },
+            tile_size
+        ));
+        (cache_dir, cache_path)
+    });
+    if cache_paths.is_none() {
+        warn_once_no_cache_dir();
+    }
     // check if the cache path exists and load it, otherwise resize and save it
     let cached_img: Result<::image::ImageBuffer<_, _>, _> = if force {
         Err(ImageError {
@@ -93,13 +104,21 @@ pub fn prepare_tile(
                 "force",
             )),
         })
-    } else {
-        ::image::open(&cache_path)
+    } else if let Some((_, cache_path)) = &cache_paths {
+        ::image::open(cache_path)
             .map_err(|e| ImageError {
                 path: path.to_owned(),
                 error: e,
             })
             .map(|img| img.to_rgb8())
+    } else {
+        Err(ImageError {
+            path: path.to_owned(),
+            error: ::image::ImageError::IoError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "no cache dir",
+            )),
+        })
     };
     cached_img.or_else(|_| {
         let mut tile_img = ::image::open(path)
@@ -208,10 +227,38 @@ pub fn prepare_tile(
             imageops::resize(tile_img.deref(), tile_size, tile_size, FilterType::Lanczos3);
         let orientation = get_jpeg_orientation(path).unwrap_or(1);
         let tile_img = rotate(tile_img.into(), orientation);
-        std::fs::create_dir_all(&cache_dir).unwrap();
-        tile_img.save(cache_path).unwrap();
+        if let Some((cache_dir, cache_path)) = &cache_paths {
+            if let Err(e) = std::fs::create_dir_all(cache_dir)
+                .and_then(|_| tile_img.save(cache_path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+            {
+                warn_once_cache_write_failed(cache_dir, &e);
+            }
+        }
         Ok(tile_img.into())
     })
+}
+
+static WARN_NO_CACHE_DIR: Once = Once::new();
+static WARN_CACHE_WRITE: Once = Once::new();
+
+fn warn_once_no_cache_dir() {
+    WARN_NO_CACHE_DIR.call_once(|| {
+        eprintln!(
+            "⚠️  Cache disabled: dirs::cache_dir() returned None. \
+             Tiles will be re-prepared on every invocation."
+        );
+    });
+}
+
+fn warn_once_cache_write_failed(cache_dir: &Path, err: &std::io::Error) {
+    WARN_CACHE_WRITE.call_once(|| {
+        eprintln!(
+            "⚠️  Cache write failed at {}: {}. \
+             Tile preparation will continue without caching for this run.",
+            cache_dir.display(),
+            err
+        );
+    });
 }
 
 fn get_jpeg_orientation(file_path: &Path) -> Result<u32, exif::Error> {
