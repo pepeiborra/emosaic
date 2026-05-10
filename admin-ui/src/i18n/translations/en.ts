@@ -52,7 +52,7 @@ export const en = {
     newPassword: 'New Password',
     confirmPassword: 'Confirm Password',
     passwordsDoNotMatch: 'Passwords do not match',
-    passwordRequirements: 'Password must be at least 12 characters with uppercase, lowercase, numbers, and symbols.',
+    passwordRequirements: 'Password must be at least 10 characters.',
     setPassword: 'Set Password',
     settingPassword: 'Setting password...',
 

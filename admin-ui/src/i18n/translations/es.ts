@@ -54,7 +54,7 @@ export const es: Translations = {
     newPassword: 'Nueva contrasena',
     confirmPassword: 'Confirmar contrasena',
     passwordsDoNotMatch: 'Las contrasenas no coinciden',
-    passwordRequirements: 'La contrasena debe tener al menos 12 caracteres con mayusculas, minusculas, numeros y simbolos.',
+    passwordRequirements: 'La contrasena debe tener al menos 10 caracteres.',
     setPassword: 'Establecer contrasena',
     settingPassword: 'Estableciendo contrasena...',
 

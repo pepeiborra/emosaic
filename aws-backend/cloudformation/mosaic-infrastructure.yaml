@@ -342,12 +342,13 @@ Resources:
           - Name: verified_email
             Priority: 1
       Policies:
+        # Aligned with NIST SP 800-63B: prefer length over composition rules.
         PasswordPolicy:
-          MinimumLength: 12
-          RequireLowercase: true
-          RequireNumbers: true
-          RequireSymbols: true
-          RequireUppercase: true
+          MinimumLength: 10
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+          RequireUppercase: false
           TemporaryPasswordValidityDays: 7
       Schema:
         - Name: email

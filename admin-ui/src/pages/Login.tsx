@@ -185,7 +185,7 @@ export function Login() {
                   placeholder={t.login.newPassword}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  minLength={12}
+                  minLength={10}
                 />
               </div>
               <div>
@@ -201,7 +201,7 @@ export function Login() {
                   placeholder={t.login.confirmPassword}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  minLength={12}
+                  minLength={10}
                 />
               </div>
             </div>
@@ -347,7 +347,7 @@ export function Login() {
                     placeholder={t.login.newPassword}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    minLength={12}
+                    minLength={10}
                   />
                 </div>
                 <div>
@@ -363,7 +363,7 @@ export function Login() {
                     placeholder={t.login.confirmPassword}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    minLength={12}
+                    minLength={10}
                   />
                 </div>
               </div>
