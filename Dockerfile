@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for emosaic
 # Stage 1: Build the Rust binary
-FROM rust:1.75-slim as builder
+FROM public.ecr.aws/docker/library/rust:1.75-slim as builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -21,7 +21,7 @@ COPY src ./src
 RUN cargo build --release
 
 # Stage 2: Runtime image
-FROM debian:bookworm-slim
+FROM public.ecr.aws/docker/library/debian:bookworm-slim
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
