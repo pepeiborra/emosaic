@@ -3,7 +3,7 @@ use std::sync::{Mutex, RwLock};
 
 use ::image::RgbImage;
 use ::image::{imageops, Rgb};
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use kiddo::fixed::distance::Manhattan;
 use kiddo::NearestNeighbour;
 use rand::prelude::IteratorRandom;
@@ -57,13 +57,15 @@ pub fn render(
     let tile_size_stepped = tile_size / step;
 
     let config = RenderConfig::default();
-    let pb = ProgressBar::new((source_img.height() * source_img.width() / step / step) as u64)
-        .with_message("Rendering")
-        .with_style(
-            ProgressStyle::default_bar()
-                .template(&config.progress_template)
-                .unwrap(),
-        );
+    let mp = MultiProgress::new();
+    let style = ProgressStyle::default_bar()
+        .template(&config.progress_template)
+        .unwrap();
+    let pb = mp.add(
+        ProgressBar::new((source_img.height() * source_img.width() / step / step) as u64)
+            .with_message("Rendering")
+            .with_style(style.clone()),
+    );
 
     let segments: Vec<_> = (0..source_img.height())
         .into_par_iter()
@@ -93,13 +95,11 @@ pub fn render(
         source_img.width() * tile_size_stepped,
         source_img.height() * tile_size_stepped,
     );
-    let pb = ProgressBar::new((source_img.height() / step) as u64)
-        .with_message("Merging")
-        .with_style(
-            ProgressStyle::default_bar()
-                .template(&config.progress_template)
-                .unwrap(),
-        );
+    let pb = mp.add(
+        ProgressBar::new((source_img.height() / step) as u64)
+            .with_message("Merging")
+            .with_style(style),
+    );
     for (i, segment) in segments.into_iter().enumerate() {
         pb.inc(1);
         imageops::replace(&mut output, &segment, 0, i as i64 * tile_size as i64);
@@ -302,13 +302,15 @@ where
     let tile_size_stepped = tile_size / step;
 
     let config = RenderConfig::default();
-    let pb = ProgressBar::new((vtiles * htiles) as u64)
-        .with_message("Scoring")
-        .with_style(
-            ProgressStyle::default_bar()
-                .template(&config.progress_template)
-                .unwrap(),
-        );
+    let mp = MultiProgress::new();
+    let style = ProgressStyle::default_bar()
+        .template(&config.progress_template)
+        .unwrap();
+    let pb = mp.add(
+        ProgressBar::new((vtiles * htiles) as u64)
+            .with_message("Scoring")
+            .with_style(style.clone()),
+    );
 
     let compute_nearest = |n: u32, k| {
         let x = n / vtiles * step;
@@ -338,13 +340,11 @@ where
 
     pb.finish_with_message("✓ Scored");
 
-    let pb = ProgressBar::new((vtiles * htiles) as u64)
-        .with_message("Rendering")
-        .with_style(
-            ProgressStyle::default_bar()
-                .template(&config.progress_template)
-                .unwrap(),
-        );
+    let pb = mp.add(
+        ProgressBar::new((vtiles * htiles) as u64)
+            .with_message("Rendering")
+            .with_style(style),
+    );
 
     // select tiles by nearest order, removing as we go
     while let Some((n, mut nearest)) = matches.pop() {
