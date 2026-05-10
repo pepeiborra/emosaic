@@ -87,6 +87,7 @@ pub fn render(
             image
         })
         .collect();
+    pb.finish_with_message("✓ Rendered");
 
     let mut output = RgbImage::new(
         source_img.width() * tile_size_stepped,
@@ -103,6 +104,7 @@ pub fn render(
         pb.inc(1);
         imageops::replace(&mut output, &segment, 0, i as i64 * tile_size as i64);
     }
+    pb.finish_with_message("✓ Merged");
     output
 }
 
@@ -334,7 +336,7 @@ where
 
     let mut used = HashSet::new();
 
-    pb.finish_and_clear();
+    pb.finish_with_message("✓ Scored");
 
     let pb = ProgressBar::new((vtiles * htiles) as u64)
         .with_message("Rendering")
@@ -392,6 +394,7 @@ where
             }
         }
     }
+    pb.finish_with_message("✓ Rendered");
 
     let stats = stats.into_inner().unwrap();
 
@@ -444,5 +447,6 @@ pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u3
             );
         }
     }
+    pb.finish_with_message("✓ Rendered");
     output
 }

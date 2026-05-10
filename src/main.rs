@@ -806,13 +806,14 @@ where
         );
 
     let errors: RwLock<Vec<ImageError>> = RwLock::new(vec![]);
+    let pb_inc = pb.clone();
     let tile_data: Vec<_> = images_paths
         .into_par_iter()
         .map(|path| {
             let img_and_date = prepare_tile_with_date(&path, tile_size, crop, force);
             (path, img_and_date)
         })
-        .inspect(move |_| pb.inc(1))
+        .inspect(move |_| pb_inc.inc(1))
         .filter_map(|x| match x {
             (path, Ok((img, date_taken))) => Some((path, img, date_taken)),
             (path, Err(error)) => {
@@ -825,6 +826,7 @@ where
             }
         })
         .collect();
+    pb.finish_with_message(format!("✓ Analysed {} tiles", tile_data.len()));
 
     let dates = tile_data
         .iter()
