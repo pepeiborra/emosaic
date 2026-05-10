@@ -16,6 +16,10 @@ CROP ?= 1
 FORCE ?= 0
 TILES_DIR ?= ./tiles_dir
 S3_BUCKET ?= casadelmanco.com
+# Root-site bucket: CloudFront's default behavior serves casadelmanco.com/
+# from here. Distinct from S3_BUCKET (tile images, served under /mosaics/,
+# /tiles/, /uploads/). Static pages like /privacy.html live here.
+ROOT_BUCKET ?= emosaic-admin-prod
 DISTRIBUTION_ID ?= E2KW8FQIKWXD1D
 TITLE ?= Casa del Manco
 TIMESTAMP := $(shell date +%Y%m%d%H%M%S)
@@ -97,8 +101,8 @@ check-deps:
 	@aws sts get-caller-identity >/dev/null || (echo "❌ AWS not configured. Run 'aws configure'." && exit 1)
 
 legal-deploy:
-	@echo "📤 Uploading legal/privacy.html to s3://$(S3_BUCKET)..."
-	AWS_PROFILE=admin aws s3 cp legal/privacy.html s3://$(S3_BUCKET)/privacy.html \
+	@echo "📤 Uploading legal/privacy.html to s3://$(ROOT_BUCKET)..."
+	AWS_PROFILE=admin aws s3 cp legal/privacy.html s3://$(ROOT_BUCKET)/privacy.html \
 		--content-type 'text/html; charset=utf-8' \
 		--cache-control 'public, max-age=3600'
 	@echo "Invalidating CloudFront /privacy.html..."
@@ -106,7 +110,7 @@ legal-deploy:
 		--distribution-id $(DISTRIBUTION_ID) \
 		--paths /privacy.html \
 		--no-cli-pager
-	@echo "✅ Privacy policy at https://$(S3_BUCKET)/privacy.html"
+	@echo "✅ Privacy policy at https://casadelmanco.com/privacy.html"
 
 # Check input file exists
 check-input:
