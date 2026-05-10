@@ -21,7 +21,10 @@ use image::{imageops, ImageFormat, Rgb};
 use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
 use mosaic::stats::MosaicConfig;
-use mosaic::tiles::{persist_tile_index, prepare_tile, prepare_tile_with_date, Tile, TileSet};
+use mosaic::tiles::{
+    persist_tile_index, prepare_tile, prepare_tile_with_date, read_tileset_from_file,
+    write_tileset_to_file, Tile, TileSet,
+};
 use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
@@ -630,7 +633,7 @@ where
     let img = imageops::resize(original_img, nwidth, nheight, FilterType::Lanczos3);
 
     let analysis_cache_path = tiles_dir.join(format!(
-        ".emosaic_{}to1{}",
+        ".emosaic_v2_{}to1{}",
         N,
         if crop { "_cropped" } else { "" }
     ));
@@ -649,13 +652,12 @@ where
         std::process::exit(1);
     }
     let extensions: HashSet<_> = extensions.iter().map(|x| x.to_lowercase()).collect();
-    let tile_set = if force {
+    let cached_tileset = if force {
         None
     } else {
-        fs::read(&analysis_cache_path).ok()
+        read_tileset_from_file::<N>(&analysis_cache_path, &tiles_dir).ok()
     };
-    let tile_set: TileSet<[Rgb<u8>; N]> = tile_set
-        .and_then(|bytes| bincode::deserialize::<TileSet<[Rgb<u8>; N]>>(&bytes).ok())
+    let tile_set: TileSet<[Rgb<u8>; N]> = cached_tileset
         .map(|analysis| {
             eprintln!("Reusing analysis cache");
             // Filter out tiles for files that no longer exist or don't match extensions
@@ -690,8 +692,13 @@ where
         .unwrap_or_else(|| {
             let extensions = extensions.clone();
             let tile_set = generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop, force).unwrap();
-            let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
-            fs::write(&analysis_cache_path, encoded_tile_set).unwrap();
+            if let Err(e) = write_tileset_to_file(&tile_set, &analysis_cache_path, &tiles_dir) {
+                eprintln!(
+                    "⚠️  Could not write analysis cache to {}: {}",
+                    analysis_cache_path.display(),
+                    e
+                );
+            }
             tile_set
         });
     eprintln!("Tile set with {} tiles", tile_set.len());
