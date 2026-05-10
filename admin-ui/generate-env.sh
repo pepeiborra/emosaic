@@ -31,6 +31,11 @@ USER_POOL_CLIENT_ID=$(aws cloudformation describe-stacks \
     --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" \
     --output text --region $AWS_REGION)
 
+COGNITO_DOMAIN=$(aws cloudformation describe-stacks \
+    --stack-name ${ENVIRONMENT}-mosaic-infrastructure \
+    --query "Stacks[0].Outputs[?OutputKey=='CognitoDomain'].OutputValue" \
+    --output text --region $AWS_REGION 2>/dev/null)
+
 API_URL=$(aws cloudformation describe-stacks \
     --stack-name ${ENVIRONMENT}-tile-flags-infrastructure \
     --query "Stacks[0].Outputs[?OutputKey=='APIGatewayURL'].OutputValue" \
@@ -45,6 +50,7 @@ cat > "$ENV_FILE" << EOF
 VITE_USER_POOL_ID=$USER_POOL_ID
 VITE_USER_POOL_CLIENT_ID=$USER_POOL_CLIENT_ID
 VITE_AWS_REGION=$AWS_REGION
+VITE_COGNITO_DOMAIN=$COGNITO_DOMAIN
 
 # API Configuration
 VITE_API_URL=$API_URL

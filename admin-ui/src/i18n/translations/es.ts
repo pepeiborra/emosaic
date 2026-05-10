@@ -47,6 +47,9 @@ export const es: Translations = {
     signingIn: 'Iniciando sesion...',
     noAccount: 'No tienes cuenta?',
     requestAccess: 'Solicitar acceso',
+    signInWithGoogle: 'Continuar con Google',
+    signInWithFacebook: 'Continuar con Facebook',
+    or: 'o',
 
     // New password
     setNewPassword: 'Establecer nueva contrasena',
@@ -73,6 +76,13 @@ export const es: Translations = {
     enterCodeFromEmail: 'Introduce el codigo del correo',
     resetting: 'Restableciendo...',
     passwordResetSuccess: 'Contrasena restablecida correctamente. Por favor, inicia sesion.',
+  },
+
+  // OAuth callback page
+  callback: {
+    signingIn: 'Iniciando sesion...',
+    failed: 'No se pudo iniciar sesion. Intentalo de nuevo.',
+    backToLogin: 'Volver a iniciar sesion',
   },
 
   // Register page

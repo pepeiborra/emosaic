@@ -45,6 +45,9 @@ export const en = {
     signingIn: 'Signing in...',
     noAccount: "Don't have an account?",
     requestAccess: 'Request access',
+    signInWithGoogle: 'Continue with Google',
+    signInWithFacebook: 'Continue with Facebook',
+    or: 'or',
 
     // New password
     setNewPassword: 'Set New Password',
@@ -71,6 +74,13 @@ export const en = {
     enterCodeFromEmail: 'Enter code from email',
     resetting: 'Resetting...',
     passwordResetSuccess: 'Password reset successfully. Please sign in.',
+  },
+
+  // OAuth callback page
+  callback: {
+    signingIn: 'Signing you in...',
+    failed: 'Sign-in failed. Please try again.',
+    backToLogin: 'Back to sign in',
   },
 
   // Register page

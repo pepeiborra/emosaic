@@ -6,6 +6,7 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
+import { Callback } from './pages/Callback';
 import { Dashboard } from './pages/Dashboard';
 import { CreateMosaic } from './pages/CreateMosaic';
 import { MosaicDetail } from './pages/MosaicDetail';
@@ -35,6 +36,7 @@ function App() {
             <Routes>
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
+              <Route path="/callback" element={<Callback />} />
               <Route
                 element={
                   <ProtectedRoute>
