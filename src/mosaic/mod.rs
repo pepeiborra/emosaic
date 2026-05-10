@@ -12,6 +12,12 @@ pub mod web;
 pub use analysis::analyse;
 pub use rendering::{render_nto1, render_nto1_no_repeat, render_random};
 
+/// Shared indicatif progress-bar template used by every long-running phase
+/// (analysis, scoring, rendering, merging). Centralised here so all bars
+/// flow consistently through the same visual layout — phase label,
+/// elapsed clock, colored fill, position/total, percent, rate, ETA.
+pub const PROGRESS_TEMPLATE: &str = "{msg:>10} [{elapsed_precise}] {wide_bar:.cyan/blue} {human_pos:>7}/{human_len:>7} ({percent:>3}%) {per_sec} ETA {eta_precise}";
+
 #[cfg(test)]
 mod tests {
     use itertools::Itertools;

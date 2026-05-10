@@ -798,10 +798,10 @@ where
             .unwrap_or(false)
     })?;
     let pb = ProgressBar::new(images_paths.len() as u64)
-        .with_message("Analysing tiles")
+        .with_message("Analysing")
         .with_style(
             ProgressStyle::default_bar()
-                .template("{msg} {wide_bar} {pos}/{len} ({per_sec})")
+                .template(mosaic::PROGRESS_TEMPLATE)
                 .unwrap(),
         );
 
