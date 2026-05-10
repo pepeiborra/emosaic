@@ -39,7 +39,7 @@ OUTPUT_JPG := $(OUTPUT_FOLDER)/$(OUTPUT_NAME).jpg
 OUTPUT_HTML := $(OUTPUT_FOLDER)/$(OUTPUT_NAME).html
 INPUT_JPG := mosaico/$(FILE)
 
-.PHONY: generate upload clean help check-deps check-input
+.PHONY: generate upload clean help check-deps check-input legal-deploy
 
 # Main target
 upload: generate check-deps check-input upload-files
@@ -95,6 +95,18 @@ check-deps:
 	@command -v cargo >/dev/null || (echo "❌ cargo not found. Install Rust." && exit 1)
 	@command -v aws >/dev/null || (echo "❌ aws CLI not found. Install AWS CLI." && exit 1)
 	@aws sts get-caller-identity >/dev/null || (echo "❌ AWS not configured. Run 'aws configure'." && exit 1)
+
+legal-deploy:
+	@echo "📤 Uploading legal/privacy.html to s3://$(S3_BUCKET)..."
+	AWS_PROFILE=admin aws s3 cp legal/privacy.html s3://$(S3_BUCKET)/privacy.html \
+		--content-type 'text/html; charset=utf-8' \
+		--cache-control 'public, max-age=3600'
+	@echo "Invalidating CloudFront /privacy.html..."
+	AWS_PROFILE=admin aws cloudfront create-invalidation \
+		--distribution-id $(DISTRIBUTION_ID) \
+		--paths /privacy.html \
+		--no-cli-pager
+	@echo "✅ Privacy policy at https://$(S3_BUCKET)/privacy.html"
 
 # Check input file exists
 check-input:
