@@ -21,7 +21,7 @@ use image::{imageops, ImageFormat, Rgb};
 use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
 use mosaic::stats::MosaicConfig;
-use mosaic::tiles::{prepare_tile, prepare_tile_with_date, Tile, TileSet};
+use mosaic::tiles::{persist_tile_index, prepare_tile, prepare_tile_with_date, Tile, TileSet};
 use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 
@@ -559,6 +559,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    persist_tile_index();
     print_runtime_stats(start_time, &memory_monitor);
     Ok(())
 }

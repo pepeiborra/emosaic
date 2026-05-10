@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Div;
 use std::path::{Path, PathBuf};
-use std::sync::Once;
+use std::sync::{Once, OnceLock, RwLock};
+use std::time::UNIX_EPOCH;
 
 use ::image::imageops;
 use ::image::Rgb;
@@ -11,6 +12,7 @@ use image::error::LimitError;
 use image::imageops::FilterType;
 use image::DynamicImage;
 use num_integer::Roots;
+use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
 use crate::mosaic::error::ImageError;
@@ -77,11 +79,30 @@ pub fn prepare_tile(
     crop: bool,
     force: bool,
 ) -> Result<::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>, ImageError> {
-    // We cache resized images in the home cache path using their content hash
-    let content_hash = md5::compute(std::fs::read(path).map_err(|e| ImageError {
+    // === Fast path: try to skip reading the full file when (path, mtime, size)
+    //                still matches an indexed (md5, cache file) pair.
+    if !force {
+        if let Some(meta_key) = metadata_key(path) {
+            if let Some(known_md5) = lookup_index(path, &meta_key) {
+                if let Some(cache_path) = cache_path_for(known_md5, crop, tile_size) {
+                    if let Ok(img) = ::image::open(&cache_path) {
+                        return Ok(img.to_rgb8());
+                    }
+                }
+            }
+        }
+    }
+
+    // === Slow path: read full bytes, hash, and (re)populate the index.
+    let bytes = std::fs::read(path).map_err(|e| ImageError {
         path: path.to_owned(),
         error: e.into(),
-    })?);
+    })?;
+    let content_hash = md5::compute(&bytes);
+    if let Some(meta_key) = metadata_key(path) {
+        update_index(path, meta_key, content_hash.0);
+    }
+
     let cache_paths: Option<(PathBuf, PathBuf)> = dirs::cache_dir().map(|d| {
         let cache_dir = d.join("mosaic");
         let cache_path = cache_dir.join(format!(
@@ -240,6 +261,8 @@ pub fn prepare_tile(
 
 static WARN_NO_CACHE_DIR: Once = Once::new();
 static WARN_CACHE_WRITE: Once = Once::new();
+static WARN_INDEX_LOAD: Once = Once::new();
+static WARN_INDEX_WRITE: Once = Once::new();
 
 fn warn_once_no_cache_dir() {
     WARN_NO_CACHE_DIR.call_once(|| {
@@ -259,6 +282,131 @@ fn warn_once_cache_write_failed(cache_dir: &Path, err: &std::io::Error) {
             err
         );
     });
+}
+
+// ===== Metadata fast-path index =====
+//
+// A small sidecar at `<cache_dir>/mosaic/index.bin` maps tile path → (mtime,
+// size, md5). It lets prepare_tile skip the full-file read+MD5 on subsequent
+// runs when the file hasn't changed. The index is purely an optimization;
+// every code path still works correctly without it.
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
+struct IndexEntry {
+    mtime: u64,
+    size: u64,
+    md5: [u8; 16],
+}
+
+type IndexMap = BTreeMap<PathBuf, IndexEntry>;
+
+static INDEX: OnceLock<RwLock<IndexMap>> = OnceLock::new();
+
+fn index_path() -> Option<PathBuf> {
+    dirs::cache_dir().map(|d| d.join("mosaic").join("index.bin"))
+}
+
+fn cache_path_for(md5: [u8; 16], crop: bool, tile_size: u32) -> Option<PathBuf> {
+    dirs::cache_dir().map(|d| {
+        d.join("mosaic").join(format!(
+            "{}{}.{}.jpg",
+            hex_md5(&md5),
+            if crop { "_cropped" } else { "" },
+            tile_size
+        ))
+    })
+}
+
+fn hex_md5(bytes: &[u8; 16]) -> String {
+    let mut s = String::with_capacity(32);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
+fn metadata_key(path: &Path) -> Option<(u64, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    let mtime = m
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some((mtime, m.len()))
+}
+
+fn get_index() -> &'static RwLock<IndexMap> {
+    INDEX.get_or_init(|| {
+        let map = match index_path() {
+            Some(p) => match std::fs::read(&p) {
+                Ok(bytes) => bincode::deserialize::<IndexMap>(&bytes).unwrap_or_else(|_| {
+                    WARN_INDEX_LOAD.call_once(|| {
+                        eprintln!(
+                            "⚠️  Tile index at {} could not be deserialized, starting fresh.",
+                            p.display()
+                        );
+                    });
+                    IndexMap::new()
+                }),
+                Err(_) => IndexMap::new(),
+            },
+            None => IndexMap::new(),
+        };
+        RwLock::new(map)
+    })
+}
+
+fn lookup_index(path: &Path, key: &(u64, u64)) -> Option<[u8; 16]> {
+    let idx = get_index().read().ok()?;
+    idx.get(path)
+        .filter(|e| e.mtime == key.0 && e.size == key.1)
+        .map(|e| e.md5)
+}
+
+fn update_index(path: &Path, key: (u64, u64), md5: [u8; 16]) {
+    if let Ok(mut idx) = get_index().write() {
+        idx.insert(
+            path.to_owned(),
+            IndexEntry {
+                mtime: key.0,
+                size: key.1,
+                md5,
+            },
+        );
+    }
+}
+
+/// Persist the in-memory tile index to disk. Best-effort; failures emit a
+/// one-shot warning. Call this once near process exit (after rendering).
+pub fn persist_tile_index() {
+    let p = match index_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let idx = match get_index().read() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    if idx.is_empty() {
+        return;
+    }
+    let bytes = match bincode::serialize(&*idx) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&p, bytes) {
+        WARN_INDEX_WRITE.call_once(|| {
+            eprintln!(
+                "⚠️  Could not persist tile index to {}: {}.",
+                p.display(),
+                e
+            );
+        });
+    }
 }
 
 fn get_jpeg_orientation(file_path: &Path) -> Result<u32, exif::Error> {
