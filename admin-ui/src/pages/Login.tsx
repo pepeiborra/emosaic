@@ -400,7 +400,7 @@ export function Login() {
     );
   }
 
-  const handleFederatedSignIn = async (provider: 'Google' | 'Facebook') => {
+  const handleFederatedSignIn = async (provider: 'Google') => {
     clearError();
     setSuccessMessage(null);
     setIsSubmitting(true);
@@ -439,17 +439,6 @@ export function Login() {
               <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.2 5.6l6.2 5.2c-.4.4 6.7-4.9 6.7-14.8 0-1.3-.1-2.4-.4-3.5z"/>
             </svg>
             {t.login.signInWithGoogle}
-          </button>
-          <button
-            type="button"
-            onClick={() => handleFederatedSignIn('Facebook')}
-            disabled={isSubmitting}
-            className="w-full flex justify-center items-center gap-2 py-2 px-4 border border-transparent rounded-md bg-[#1877F2] text-sm font-medium text-white hover:bg-[#166FE5] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#1877F2] disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M24 12a12 12 0 1 0-13.875 11.854v-8.385H7.078V12h3.047V9.356c0-3.007 1.792-4.668 4.533-4.668 1.312 0 2.686.234 2.686.234v2.953h-1.513c-1.49 0-1.955.925-1.955 1.874V12h3.328l-.532 3.469h-2.796v8.385A12.002 12.002 0 0 0 24 12"/>
-            </svg>
-            {t.login.signInWithFacebook}
           </button>
         </div>
 

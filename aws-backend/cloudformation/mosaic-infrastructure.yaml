@@ -379,7 +379,6 @@ Resources:
     # Federated providers must exist before the client lists them.
     DependsOn:
       - GoogleIdentityProvider
-      - FacebookIdentityProvider
     Properties:
       ClientName: !Sub '${Environment}-emosaic-admin-client'
       UserPoolId: !Ref AdminUserPool
@@ -399,7 +398,6 @@ Resources:
       SupportedIdentityProviders:
         - COGNITO
         - Google
-        - Facebook
       CallbackURLs:
         - https://casadelmanco.com/admin/callback
         - http://localhost:5173/callback
@@ -453,20 +451,10 @@ Resources:
         name: name
         email_verified: email_verified
 
-  FacebookIdentityProvider:
-    Type: AWS::Cognito::UserPoolIdentityProvider
-    Properties:
-      UserPoolId: !Ref AdminUserPool
-      ProviderName: Facebook
-      ProviderType: Facebook
-      ProviderDetails:
-        client_id: !Sub '{{resolve:secretsmanager:${OAuthSecretName}:SecretString:facebook_app_id}}'
-        client_secret: !Sub '{{resolve:secretsmanager:${OAuthSecretName}:SecretString:facebook_app_secret}}'
-        authorize_scopes: 'email public_profile'
-        api_version: 'v18.0'
-      AttributeMapping:
-        email: email
-        name: name
+  # Facebook IdP deferred — re-add this resource (and re-add `Facebook` to
+  # AdminUserPoolClient.SupportedIdentityProviders + DependsOn) once the
+  # Facebook Developer Console app exists and its credentials are in
+  # Secrets Manager under keys facebook_app_id / facebook_app_secret.
 
   #############################################################################
   # Pre-Sign-Up + Post-Confirmation Lambda Triggers (for federated sign-up)
