@@ -806,14 +806,21 @@ where
         );
 
     let errors: RwLock<Vec<ImageError>> = RwLock::new(vec![]);
-    let pb_inc = pb.clone();
+    let pb_for_inspect = pb.clone();
+    let err_count = std::sync::atomic::AtomicUsize::new(0);
     let tile_data: Vec<_> = images_paths
         .into_par_iter()
         .map(|path| {
             let img_and_date = prepare_tile_with_date(&path, tile_size, crop, force);
             (path, img_and_date)
         })
-        .inspect(move |_| pb_inc.inc(1))
+        .inspect(|(_, r)| {
+            if r.is_err() {
+                let n = err_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                pb_for_inspect.set_message(format!("Analysing ({} errors)", n));
+            }
+            pb_for_inspect.inc(1);
+        })
         .filter_map(|x| match x {
             (path, Ok((img, date_taken))) => Some((path, img, date_taken)),
             (path, Err(error)) => {
@@ -826,7 +833,17 @@ where
             }
         })
         .collect();
-    pb.finish_with_message(format!("✓ Analysed {} tiles", tile_data.len()));
+    let final_errs = err_count.load(std::sync::atomic::Ordering::Relaxed);
+    let suffix = if final_errs > 0 {
+        format!(" ({} errors)", final_errs)
+    } else {
+        String::new()
+    };
+    pb.finish_with_message(format!(
+        "✓ Analysed {} tiles{}",
+        tile_data.len(),
+        suffix
+    ));
 
     let dates = tile_data
         .iter()
