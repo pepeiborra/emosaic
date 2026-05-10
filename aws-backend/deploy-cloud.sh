@@ -354,8 +354,14 @@ if [ "$SKIP_BATCH" = "false" ]; then
     if [ $? -eq 0 ]; then
         echo "✅ Batch infrastructure deployed"
     else
-        echo "❌ Batch infrastructure deployment failed"
-        exit 1
+        # Non-fatal: subsequent phases consume Batch's existing CF exports.
+        # As long as a previous Batch deploy succeeded once, the exports are
+        # still valid even when an update rolls back. Common cause of failure
+        # here is the BatchJobDefinition trying to publish a new revision while
+        # the previous ARN is still imported by prod-mosaic-api.
+        echo "❌ Batch infrastructure deployment failed — continuing with later phases."
+        echo "   See: AWS_PROFILE=admin aws cloudformation describe-stack-events --stack-name $STACK_BATCH --region $REGION"
+        BATCH_DEPLOY_FAILED=true
     fi
 else
     echo "⏭️  Skipping Batch deployment"
@@ -1184,7 +1190,12 @@ echo "    GET    $API_URL/registrations             - List pending registrations
 echo "    POST   $API_URL/registrations/{id}/approve - Approve registration"
 echo "    POST   $API_URL/registrations/{id}/reject  - Reject registration"
 echo ""
-echo "🎉 Deployment completed successfully!"
+if [ "$BATCH_DEPLOY_FAILED" = "true" ]; then
+    echo "⚠️  Deployment finished with Batch failure — other phases applied successfully."
+    echo "   Re-investigate the Batch stack before relying on it (mosaic generation jobs)."
+else
+    echo "🎉 Deployment completed successfully!"
+fi
 echo ""
 echo "Next steps:"
 echo "1. Check your email ($ADMIN_EMAIL) for Cognito temporary password"
