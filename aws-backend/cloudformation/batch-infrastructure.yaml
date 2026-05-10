@@ -354,8 +354,15 @@ Outputs:
       Name: !Sub '${Environment}-emosaic-job-queue-name'
 
   BatchJobDefinitionArn:
-    Description: ARN of the Batch job definition
-    Value: !Ref BatchJobDefinition
+    # Export the job definition NAME, not the versioned ARN that !Ref returns.
+    # SubmitJob accepts a bare name and auto-resolves to the latest ACTIVE
+    # revision. With the previous !Ref export, any CFN-driven update of this
+    # resource created a new revision and deregistered the previous one,
+    # stranding downstream Lambdas with an INACTIVE jobDefinition reference
+    # until they were redeployed. The export name is kept for back-compat
+    # with the existing !ImportValue in mosaic-api.yaml.
+    Description: Name of the Batch job definition (auto-resolves to latest ACTIVE revision)
+    Value: !Sub '${Environment}-emosaic-job'
     Export:
       Name: !Sub '${Environment}-emosaic-job-definition-arn'
 
