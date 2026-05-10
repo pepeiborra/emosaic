@@ -54,8 +54,15 @@ enum SubCommand {
     /// and resizing to the selected tile size as needed. This is done
     /// automatically at mosaic creation time, but sometimes it is useful to test
     /// the outcome on a specific image
-    Prepare,
+    Prepare(Prepare),
     Mosaic(Mosaic),
+}
+
+#[derive(Args)]
+struct Prepare {
+    /// Bypass the on-disk tile cache and re-prepare from the source
+    #[clap(short, long)]
+    force: bool,
 }
 
 #[derive(Args)]
@@ -377,8 +384,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match subcmd {
         None => (),
-        Some(SubCommand::Prepare) => {
-            let tile = prepare_tile(&img, tile_size, crop)
+        Some(SubCommand::Prepare(args)) => {
+            let tile = prepare_tile(&img, tile_size, crop, args.force)
                 .map_err(|e| format!("Failed to prepare tile from {}: {}", img.display(), e))?;
             tile.save(&output_path)
                 .map_err(|e| format!("Failed to save tile to {}: {}", output_path.display(), e))?;
@@ -681,7 +688,7 @@ where
         })
         .unwrap_or_else(|| {
             let extensions = extensions.clone();
-            let tile_set = generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop).unwrap();
+            let tile_set = generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop, force).unwrap();
             let encoded_tile_set = bincode::serialize(&tile_set).unwrap();
             fs::write(&analysis_cache_path, encoded_tile_set).unwrap();
             tile_set
@@ -771,6 +778,7 @@ fn generate_tile_set<const N: usize>(
     tile_size: u32,
     extensions: HashSet<String>,
     crop: bool,
+    force: bool,
 ) -> io::Result<TileSet<[Rgb<u8>; N]>>
 where
     // TileSet<T>: Serialize,
@@ -793,7 +801,7 @@ where
     let tile_data: Vec<_> = images_paths
         .into_par_iter()
         .map(|path| {
-            let img_and_date = prepare_tile_with_date(&path, tile_size, crop);
+            let img_and_date = prepare_tile_with_date(&path, tile_size, crop, force);
             (path, img_and_date)
         })
         .inspect(move |_| pb.inc(1))

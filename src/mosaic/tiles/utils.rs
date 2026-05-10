@@ -47,6 +47,7 @@ pub fn prepare_tile_with_date(
     path: &Path,
     tile_size: u32,
     crop: bool,
+    force: bool,
 ) -> Result<
     (
         ::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>,
@@ -56,15 +57,20 @@ pub fn prepare_tile_with_date(
 > {
     // Try EXIF date first, then fall back to extracting year from file path
     let date_taken = get_exif_date(path).or_else(|| get_year_from_path(path));
-    let image = prepare_tile(path, tile_size, crop)?;
+    let image = prepare_tile(path, tile_size, crop, force)?;
     Ok((image, date_taken))
 }
 
 /// Prepare a tile image by resizing, cropping, and caching it.
+///
+/// When `force` is true, the on-disk cache entry is bypassed (but still overwritten
+/// with the freshly-prepared image). Use this to invalidate stale cache entries after
+/// modifying tile contents in place.
 pub fn prepare_tile(
     path: &Path,
     tile_size: u32,
     crop: bool,
+    force: bool,
 ) -> Result<::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>, ImageError> {
     // We cache resized images in the home cache path using their content hash
     let content_hash = md5::compute(std::fs::read(path).map_err(|e| ImageError {
@@ -79,12 +85,22 @@ pub fn prepare_tile(
         tile_size
     ));
     // check if the cache path exists and load it, otherwise resize and save it
-    let cached_img: Result<::image::ImageBuffer<_, _>, _> = ::image::open(&cache_path)
-        .map_err(|e| ImageError {
+    let cached_img: Result<::image::ImageBuffer<_, _>, _> = if force {
+        Err(ImageError {
             path: path.to_owned(),
-            error: e,
+            error: ::image::ImageError::IoError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "force",
+            )),
         })
-        .map(|img| img.to_rgb8());
+    } else {
+        ::image::open(&cache_path)
+            .map_err(|e| ImageError {
+                path: path.to_owned(),
+                error: e,
+            })
+            .map(|img| img.to_rgb8())
+    };
     cached_img.or_else(|_| {
         let mut tile_img = ::image::open(path)
             .map_err(|e| ImageError {
@@ -320,7 +336,7 @@ mod tests {
     fn test_prepare_tile() {
         let path = Path::new("example/warhol.png");
         let tile_size = 32;
-        let result = prepare_tile(path, tile_size, true);
+        let result = prepare_tile(path, tile_size, true, false);
         assert!(result.is_ok());
         let tile_img = result.unwrap();
         assert_eq!(tile_img.width(), tile_size);

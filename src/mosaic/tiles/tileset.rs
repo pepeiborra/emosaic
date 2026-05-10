@@ -152,7 +152,7 @@ impl<T> TileSet<T> {
         let image = self
             .images
             .get(&tile.idx)
-            .map_or_else(|| prepare_tile(path, tile_size, true), |x| Ok(x.clone()))?;
+            .map_or_else(|| prepare_tile(path, tile_size, true, false), |x| Ok(x.clone()))?;
         Ok(if tile.flipped {
             image::imageops::flip_horizontal(&image)
         } else {
