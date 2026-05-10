@@ -185,8 +185,13 @@ Resources:
           CORS_ORIGIN: !Ref CorsOrigin
           BATCH_JOB_QUEUE: !ImportValue
             Fn::Sub: '${Environment}-emosaic-job-queue-name'
-          BATCH_JOB_DEFINITION: !ImportValue
-            Fn::Sub: '${Environment}-emosaic-job-definition-arn'
+          # Compute the bare job-definition name directly instead of
+          # importing the versioned ARN that batch-infrastructure exports.
+          # SubmitJob accepts a name and auto-resolves to the latest ACTIVE
+          # revision, so this Lambda no longer needs a redeploy every time
+          # CFN bumps the job-def revision (which deregisters the previous
+          # one and would otherwise strand us with an INACTIVE ARN).
+          BATCH_JOB_DEFINITION: !Sub '${Environment}-emosaic-job'
           S3_BUCKET: !ImportValue
             Fn::Sub: '${Environment}-emosaic-tiles-bucket'
       Timeout: 30
