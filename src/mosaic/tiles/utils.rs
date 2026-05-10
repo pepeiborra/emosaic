@@ -106,7 +106,7 @@ pub fn prepare_tile(
     let cache_paths: Option<(PathBuf, PathBuf)> = dirs::cache_dir().map(|d| {
         let cache_dir = d.join("mosaic");
         let cache_path = cache_dir.join(format!(
-            "{:x}{}.{}.jpg",
+            "{:x}{}.{}.png",
             content_hash,
             if crop { "_cropped" } else { "" },
             tile_size
@@ -309,7 +309,7 @@ fn index_path() -> Option<PathBuf> {
 fn cache_path_for(md5: [u8; 16], crop: bool, tile_size: u32) -> Option<PathBuf> {
     dirs::cache_dir().map(|d| {
         d.join("mosaic").join(format!(
-            "{}{}.{}.jpg",
+            "{}{}.{}.png",
             hex_md5(&md5),
             if crop { "_cropped" } else { "" },
             tile_size
