@@ -30,7 +30,7 @@ impl Default for RenderConfig {
     fn default() -> Self {
         Self {
             random_neighbor_count: 20,
-            progress_template: "{msg} {wide_bar} {pos}/{len} ({per_sec})".to_string(),
+            progress_template: "{msg:>10} [{elapsed_precise}] {wide_bar:.cyan/blue} {human_pos:>7}/{human_len:>7} ({percent:>3}%) {per_sec} ETA {eta_precise}".to_string(),
         }
     }
 }
