@@ -244,6 +244,8 @@ aws cloudformation deploy \
         CorsOrigin="$CORS_ORIGIN" \
         UseExistingBucket="$USE_EXISTING_RESOURCES" \
         ExistingTilesBucketName="$EXISTING_TILES_BUCKET" \
+        OAuthSecretName="${OAUTH_SECRET_NAME:-${ENVIRONMENT}/casadelmanco/oauth}" \
+        CognitoDomainPrefix="${COGNITO_DOMAIN_PREFIX:-casadelmanco-auth}" \
     --capabilities CAPABILITY_NAMED_IAM \
     --region $REGION
 
@@ -254,20 +256,32 @@ else
     exit 1
 fi
 
-# Update Custom Message Lambda code
-echo "📤 Updating Custom Message Lambda code..."
+# Update Cognito-trigger Lambda code (custom message, pre-signup, post-confirmation)
+echo "📤 Updating Cognito trigger Lambda code..."
 cd lambda/mosaic
 zip -q -r ../../custom_message.zip custom_message.py
+zip -q -r ../../pre_signup.zip pre_signup.py
+zip -q -r ../../post_confirmation.zip post_confirmation.py
 cd ../..
 
-CUSTOM_MSG_FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_INFRA --query "Stacks[0].Outputs[?OutputKey=='CustomMessageFunctionName'].OutputValue" --output text --region $REGION 2>/dev/null || echo "")
-if [ -n "$CUSTOM_MSG_FN" ] && [ "$CUSTOM_MSG_FN" != "None" ]; then
-    aws lambda update-function-code --function-name $CUSTOM_MSG_FN --zip-file fileb://custom_message.zip --region $REGION > /dev/null
-    echo "✅ Custom Message Lambda code updated"
-else
-    echo "⚠️  Custom Message Lambda not found (may not be deployed yet)"
-fi
-rm -f custom_message.zip
+for entry in \
+    "CustomMessageFunctionName:custom_message.zip:Custom Message" \
+    "PreSignUpFunctionName:pre_signup.zip:Pre-Sign-Up" \
+    "PostConfirmationFunctionName:post_confirmation.zip:Post-Confirmation"; do
+    OUTPUT_KEY="${entry%%:*}"
+    REST="${entry#*:}"
+    ZIP_FILE="${REST%%:*}"
+    LABEL="${REST#*:}"
+    FN=$(aws cloudformation describe-stacks --stack-name $STACK_MOSAIC_INFRA --query "Stacks[0].Outputs[?OutputKey=='$OUTPUT_KEY'].OutputValue" --output text --region $REGION 2>/dev/null || echo "")
+    if [ -n "$FN" ] && [ "$FN" != "None" ]; then
+        aws lambda update-function-code --function-name $FN --zip-file fileb://$ZIP_FILE --region $REGION > /dev/null
+        echo "✅ $LABEL Lambda code updated"
+    else
+        echo "⚠️  $LABEL Lambda not found (may not be deployed yet)"
+    fi
+done
+
+rm -f custom_message.zip pre_signup.zip post_confirmation.zip
 
 echo ""
 echo "====================================================================="

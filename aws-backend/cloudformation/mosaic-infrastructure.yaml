@@ -32,6 +32,16 @@ Parameters:
     Default: ''
     Description: Name of existing tiles bucket to use (required when UseExistingBucket=true)
 
+  OAuthSecretName:
+    Type: String
+    Default: 'prod/casadelmanco/oauth'
+    Description: Secrets Manager secret holding Google + Facebook OAuth credentials (keys google_client_id, google_client_secret, facebook_app_id, facebook_app_secret)
+
+  CognitoDomainPrefix:
+    Type: String
+    Default: 'casadelmanco-auth'
+    Description: Prefix for the Cognito hosted UI domain (becomes <prefix>-<env>.auth.<region>.amazoncognito.com — must be globally unique within the region)
+
 Conditions:
   CreateBucket: !Equals [!Ref UseExistingBucket, 'false']
 
@@ -325,7 +335,12 @@ Resources:
       MfaConfiguration: 'OFF'
       LambdaConfig:
         CustomMessage: !GetAtt CustomMessageFunction.Arn
+        PreSignUp: !GetAtt PreSignUpFunction.Arn
+        PostConfirmation: !GetAtt PostConfirmationFunction.Arn
       AdminCreateUserConfig:
+        # Federated sign-up (Google/Facebook) bypasses this flag — it only
+        # gates the public SignUp API. Keep it true so nobody can self-signup
+        # via email/password without an admin invite.
         AllowAdminCreateUserOnly: true
         # Note: InviteMessageTemplate is overridden by CustomMessage Lambda trigger
         InviteMessageTemplate:
@@ -361,6 +376,10 @@ Resources:
 
   AdminUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
+    # Federated providers must exist before the client lists them.
+    DependsOn:
+      - GoogleIdentityProvider
+      - FacebookIdentityProvider
     Properties:
       ClientName: !Sub '${Environment}-emosaic-admin-client'
       UserPoolId: !Ref AdminUserPool
@@ -379,6 +398,21 @@ Resources:
         RefreshToken: days
       SupportedIdentityProviders:
         - COGNITO
+        - Google
+        - Facebook
+      CallbackURLs:
+        - https://casadelmanco.com/admin/callback
+        - http://localhost:5173/callback
+      LogoutURLs:
+        - https://casadelmanco.com/admin
+        - http://localhost:5173
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
 
   # Create initial admin user
   AdminUser:
@@ -393,6 +427,147 @@ Resources:
           Value: 'true'
       DesiredDeliveryMediums:
         - EMAIL
+
+  #############################################################################
+  # Cognito Hosted UI domain + Federated Identity Providers
+  #############################################################################
+
+  AdminUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref AdminUserPool
+      Domain: !Sub '${CognitoDomainPrefix}-${Environment}'
+
+  GoogleIdentityProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      UserPoolId: !Ref AdminUserPool
+      ProviderName: Google
+      ProviderType: Google
+      ProviderDetails:
+        client_id: !Sub '{{resolve:secretsmanager:${OAuthSecretName}:SecretString:google_client_id}}'
+        client_secret: !Sub '{{resolve:secretsmanager:${OAuthSecretName}:SecretString:google_client_secret}}'
+        authorize_scopes: 'openid email profile'
+      AttributeMapping:
+        email: email
+        name: name
+        email_verified: email_verified
+
+  FacebookIdentityProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      UserPoolId: !Ref AdminUserPool
+      ProviderName: Facebook
+      ProviderType: Facebook
+      ProviderDetails:
+        client_id: !Sub '{{resolve:secretsmanager:${OAuthSecretName}:SecretString:facebook_app_id}}'
+        client_secret: !Sub '{{resolve:secretsmanager:${OAuthSecretName}:SecretString:facebook_app_secret}}'
+        authorize_scopes: 'email public_profile'
+        api_version: 'v18.0'
+      AttributeMapping:
+        email: email
+        name: name
+
+  #############################################################################
+  # Pre-Sign-Up + Post-Confirmation Lambda Triggers (for federated sign-up)
+  #############################################################################
+
+  PreSignUpLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-pre-signup-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  PreSignUpFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-cognito-pre-signup'
+      Runtime: python3.11
+      Handler: pre_signup.lambda_handler
+      Role: !GetAtt PreSignUpLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replaced by deploy-cloud.sh
+          def lambda_handler(event, context):
+              return event
+      Timeout: 10
+      Tags:
+        - Key: Project
+          Value: Emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
+  PreSignUpLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PreSignUpFunction
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*'
+
+  PostConfirmationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-post-confirmation-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SESAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+
+  PostConfirmationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-cognito-post-confirmation'
+      Runtime: python3.11
+      Handler: post_confirmation.lambda_handler
+      Role: !GetAtt PostConfirmationLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replaced by deploy-cloud.sh
+          def lambda_handler(event, context):
+              return event
+      Environment:
+        Variables:
+          ADMIN_NOTIFICATION_EMAIL: !Ref AdminEmail
+          ADMIN_EMAIL_FROM: 'noreply@casadelmanco.com'
+          ADMIN_PANEL_URL: 'https://casadelmanco.com/admin'
+      Timeout: 10
+      Tags:
+        - Key: Project
+          Value: Emosaic
+        - Key: Environment
+          Value: !Ref Environment
+
+  PostConfirmationLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref PostConfirmationFunction
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*'
 
   #############################################################################
   # IAM Role for Mosaic Lambda Functions
@@ -609,3 +784,21 @@ Outputs:
     Value: !GetAtt CustomMessageFunction.Arn
     Export:
       Name: !Sub '${Environment}-custom-message-function-arn'
+
+  PreSignUpFunctionName:
+    Description: Name of the Pre-Sign-Up Lambda function
+    Value: !Ref PreSignUpFunction
+    Export:
+      Name: !Sub '${Environment}-pre-signup-function'
+
+  PostConfirmationFunctionName:
+    Description: Name of the Post-Confirmation Lambda function
+    Value: !Ref PostConfirmationFunction
+    Export:
+      Name: !Sub '${Environment}-post-confirmation-function'
+
+  CognitoDomain:
+    Description: Cognito hosted UI domain (use this in OAuth provider redirect URIs and frontend Amplify config)
+    Value: !Sub '${CognitoDomainPrefix}-${Environment}.auth.${AWS::Region}.amazoncognito.com'
+    Export:
+      Name: !Sub '${Environment}-emosaic-cognito-domain'
