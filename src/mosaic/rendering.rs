@@ -92,7 +92,13 @@ pub fn render(
         source_img.width() * tile_size_stepped,
         source_img.height() * tile_size_stepped,
     );
-    let pb = ProgressBar::new((source_img.height() / step) as u64).with_message("Merging");
+    let pb = ProgressBar::new((source_img.height() / step) as u64)
+        .with_message("Merging")
+        .with_style(
+            ProgressStyle::default_bar()
+                .template(&config.progress_template)
+                .unwrap(),
+        );
     for (i, segment) in segments.into_iter().enumerate() {
         pb.inc(1);
         imageops::replace(&mut output, &segment, 0, i as i64 * tile_size as i64);
@@ -417,8 +423,14 @@ pub fn render_random(source_img: &RgbImage, tile_set: TileSet<()>, tile_size: u3
         source_img.height() * tile_size,
     );
 
+    let config = RenderConfig::default();
     let pb = ProgressBar::new(source_img.height() as u64 * source_img.width() as u64)
-        .with_message("Rendering");
+        .with_message("Rendering")
+        .with_style(
+            ProgressStyle::default_bar()
+                .template(&config.progress_template)
+                .unwrap(),
+        );
     for tile_y in 0..source_img.height() {
         for tile_x in 0..source_img.width() {
             pb.inc(1);
