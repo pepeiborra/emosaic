@@ -71,14 +71,22 @@ aws s3 sync dist/ s3://${ADMIN_BUCKET}/admin/ \
 # is managed by set_main_mosaic.py which copies the main mosaic widget there.
 # Creating a redirect here would overwrite the main mosaic.
 
-# Determine CloudFront distribution ID
-# - For prod (no custom domain): use main distribution
-# - For other environments: use their own CloudFront distribution from the admin-ui stack
+# Determine CloudFront distribution(s) to invalidate.
+# The emosaic-admin-prod S3 bucket is served by TWO CloudFront distributions in prod:
+#   - E2KW8FQIKWXD1D — the main casadelmanco.com distribution (what real users hit at /admin/)
+#   - The one exported by ${ENVIRONMENT}-admin-ui (the raw djceloluh236z.cloudfront.net staging URL)
+# Both need invalidation or users keep seeing cached old code.
+# For non-prod environments, only the stack-specific distribution exists / matters.
 if [ -z "$DISTRIBUTION_ID" ]; then
-    # Check if this environment has its own CloudFront distribution
     STACK_CF_ID=$(aws cloudformation describe-stacks --stack-name $STACK_ADMIN_UI --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text --region $REGION 2>/dev/null || echo "")
 
-    if [ -n "$STACK_CF_ID" ] && [ "$STACK_CF_ID" != "None" ]; then
+    if [ "$ENVIRONMENT" = "prod" ]; then
+        DISTRIBUTION_ID="E2KW8FQIKWXD1D"
+        ADMIN_URL="https://casadelmanco.com/admin/"
+        if [ -n "$STACK_CF_ID" ] && [ "$STACK_CF_ID" != "None" ]; then
+            EXTRA_DISTRIBUTION_ID="$STACK_CF_ID"
+        fi
+    elif [ -n "$STACK_CF_ID" ] && [ "$STACK_CF_ID" != "None" ]; then
         DISTRIBUTION_ID="$STACK_CF_ID"
         ADMIN_URL=$(aws cloudformation describe-stacks --stack-name $STACK_ADMIN_UI --query "Stacks[0].Outputs[?OutputKey=='CustomDomainURL'].OutputValue" --output text --region $REGION 2>/dev/null || echo "")
         if [ -z "$ADMIN_URL" ] || [ "$ADMIN_URL" = "None" ]; then
@@ -86,7 +94,6 @@ if [ -z "$DISTRIBUTION_ID" ]; then
         fi
         ADMIN_URL="${ADMIN_URL}/admin/"
     else
-        # Fall back to main distribution for prod
         DISTRIBUTION_ID="E2KW8FQIKWXD1D"
         ADMIN_URL="https://casadelmanco.com/admin/"
     fi
@@ -98,6 +105,13 @@ echo "Creating CloudFront invalidation for distribution $DISTRIBUTION_ID..."
 aws cloudfront create-invalidation \
     --distribution-id $DISTRIBUTION_ID \
     --paths "/admin/*"
+
+if [ -n "$EXTRA_DISTRIBUTION_ID" ]; then
+    echo "Creating CloudFront invalidation for secondary distribution $EXTRA_DISTRIBUTION_ID..."
+    aws cloudfront create-invalidation \
+        --distribution-id $EXTRA_DISTRIBUTION_ID \
+        --paths "/admin/*"
+fi
 
 echo ""
 echo "====================================================================="
