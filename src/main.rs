@@ -412,7 +412,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match subcmd {
         None => (),
         Some(SubCommand::Prepare(args)) => {
-            let tile = prepare_tile(&img, tile_size, crop, args.force)
+            let tile = prepare_tile(&img, tile_size, crop, args.force, None)
                 .map_err(|e| format!("Failed to prepare tile from {}: {}", img.display(), e))?;
             tile.save(&output_path)
                 .map_err(|e| format!("Failed to save tile to {}: {}", output_path.display(), e))?;
@@ -812,7 +812,8 @@ where
         .into_par_iter()
         .map(|tile| {
             let path = tile.local_path();
-            let img_and_date = prepare_tile_with_date(&path, tile_size, crop, force);
+            let img_and_date =
+                prepare_tile_with_date(&path, tile_size, crop, force, tile.etag.as_deref());
             (path, img_and_date)
         })
         .inspect(|(_, r)| {

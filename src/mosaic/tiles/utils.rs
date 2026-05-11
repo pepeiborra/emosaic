@@ -62,6 +62,7 @@ pub fn prepare_tile_with_date(
     tile_size: u32,
     crop: bool,
     force: bool,
+    etag: Option<&str>,
 ) -> Result<
     (
         ::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>,
@@ -71,7 +72,7 @@ pub fn prepare_tile_with_date(
 > {
     // Try EXIF date first, then fall back to extracting year from file path
     let date_taken = get_exif_date(path).or_else(|| get_year_from_path(path));
-    let image = prepare_tile(path, tile_size, crop, force)?;
+    let image = prepare_tile(path, tile_size, crop, force, etag)?;
     Ok((image, date_taken))
 }
 
@@ -89,10 +90,31 @@ pub fn prepare_tile(
     tile_size: u32,
     crop: bool,
     force: bool,
+    etag: Option<&str>,
 ) -> Result<::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>, ImageError> {
-    // === Fast path: try to skip reading the full file when (path, mtime, size)
-    //                still matches an indexed (md5, cache file) pair.
+    // === Etag fast path: when an S3 source supplies the cache key directly,
+    //                     we never need to read or hash the raw tile bytes
+    //                     on a cache hit.
     if !force {
+        if let Some(etag) = etag {
+            let key = normalise_etag(etag);
+            if let Some(cache_path) = cache_path_for_key(key, crop, tile_size) {
+                if let Ok(img) = ::image::open(&cache_path) {
+                    return Ok(img.to_rgb8());
+                }
+                if try_s3_pull_key(key, crop, tile_size, &cache_path) {
+                    if let Ok(img) = ::image::open(&cache_path) {
+                        return Ok(img.to_rgb8());
+                    }
+                }
+            }
+        }
+    }
+
+    // === MD5 fast path: try to skip reading the full file when
+    //                    (path, mtime, size) still matches an indexed
+    //                    (md5, cache file) pair. Local source only.
+    if !force && etag.is_none() {
         if let Some(meta_key) = metadata_key(path) {
             if let Some(known_md5) = lookup_index(path, &meta_key) {
                 if let Some(cache_path) = cache_path_for(known_md5, crop, tile_size) {
@@ -111,10 +133,12 @@ pub fn prepare_tile(
         }
     }
 
-    // === Slow path: read full bytes, hash, and (re)populate the index.
-    // Wall-clock the entire slow path via a Drop guard; we subtract the
-    // thread-local S3 duration (accumulated by record_s3_dur) to get the
-    // CPU-only contribution before adding to the global CPU_NS counter.
+    // === Slow path: read full bytes, then prepare. Cache key depends on
+    //                whether the caller supplied an etag (S3 source) or we
+    //                fall back to content MD5 (Local source).
+    // Wall-clock via a Drop guard; we subtract this thread's S3 duration
+    // (accumulated by record_s3_dur) to get the CPU-only contribution
+    // before adding to the global CPU_NS counter.
     THREAD_S3_DUR.with(|c| c.set(Duration::ZERO));
     let _cpu_timer = CpuTimerGuard {
         start: Instant::now(),
@@ -123,20 +147,28 @@ pub fn prepare_tile(
         path: path.to_owned(),
         error: e.into(),
     })?;
-    let content_hash = md5::compute(&bytes);
-    if let Some(meta_key) = metadata_key(path) {
-        update_index(path, meta_key, content_hash.0);
-    }
+    let cache_key: String = match etag {
+        Some(e) => normalise_etag(e).to_owned(),
+        None => {
+            let h = md5::compute(&bytes);
+            if let Some(meta_key) = metadata_key(path) {
+                update_index(path, meta_key, h.0);
+            }
+            hex_md5(&h.0)
+        }
+    };
 
     let cache_paths: Option<(PathBuf, PathBuf)> = dirs::cache_dir().map(|d| {
         let cache_dir = d.join("mosaic");
-        let cache_path = cache_dir.join(format!(
-            "{:x}{}.v{}.{}.png",
-            content_hash,
-            if crop { "_cropped" } else { "" },
-            PREPARE_TILE_CACHE_VERSION,
-            tile_size
-        ));
+        let cache_path = cache_path_for_key(&cache_key, crop, tile_size).unwrap_or_else(|| {
+            cache_dir.join(format!(
+                "{}{}.v{}.{}.png",
+                cache_key,
+                if crop { "_cropped" } else { "" },
+                PREPARE_TILE_CACHE_VERSION,
+                tile_size
+            ))
+        });
         (cache_dir, cache_path)
     });
     if cache_paths.is_none() {
@@ -158,7 +190,7 @@ pub fn prepare_tile(
                 path: path.to_owned(),
                 error: e,
             })
-        } else if try_s3_pull(&content_hash.0, crop, tile_size, cache_path) {
+        } else if try_s3_pull_key(&cache_key, crop, tile_size, cache_path) {
             ::image::open(cache_path)
                 .map_err(|e| ImageError {
                     path: path.to_owned(),
@@ -297,7 +329,7 @@ pub fn prepare_tile(
                 warn_once_cache_write_failed(cache_dir, &e);
             } else {
                 // Best-effort write-through to S3; never fatal.
-                try_s3_push(&content_hash.0, crop, tile_size, cache_path);
+                try_s3_push_key(&cache_key, crop, tile_size, cache_path);
             }
         }
         Ok(tile_img.into())
@@ -352,15 +384,26 @@ fn index_path() -> Option<PathBuf> {
 }
 
 fn cache_path_for(md5: [u8; 16], crop: bool, tile_size: u32) -> Option<PathBuf> {
+    cache_path_for_key(&hex_md5(&md5), crop, tile_size)
+}
+
+/// Resolve the local cache path for a given opaque cache key (hex MD5 for
+/// Local sources, S3 ETag for S3 sources).
+fn cache_path_for_key(key: &str, crop: bool, tile_size: u32) -> Option<PathBuf> {
     dirs::cache_dir().map(|d| {
         d.join("mosaic").join(format!(
             "{}{}.v{}.{}.png",
-            hex_md5(&md5),
+            key,
             if crop { "_cropped" } else { "" },
             PREPARE_TILE_CACHE_VERSION,
             tile_size
         ))
     })
+}
+
+/// Trim the surrounding double-quotes that S3 wraps around ETag values.
+fn normalise_etag(etag: &str) -> &str {
+    etag.trim_matches('"')
 }
 
 fn hex_md5(bytes: &[u8; 16]) -> String {
@@ -535,25 +578,31 @@ fn s3_handle() -> Option<&'static S3Handle> {
         .as_ref()
 }
 
-fn s3_key(prefix: &str, md5: &[u8; 16], crop: bool, tile_size: u32) -> String {
+fn s3_key(prefix: &str, key: &str, crop: bool, tile_size: u32) -> String {
     format!(
         "{}{}{}.v{}.{}.png",
         prefix,
-        hex_md5(md5),
+        key,
         if crop { "_cropped" } else { "" },
         PREPARE_TILE_CACHE_VERSION,
         tile_size
     )
 }
 
-/// Try to populate `local_path` from S3. Returns true on success.
-/// Any error (including bucket disabled, NoSuchKey, network) returns false.
+/// MD5-keyed wrapper around `try_s3_pull_key` for the Local source path.
 fn try_s3_pull(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) -> bool {
+    try_s3_pull_key(&hex_md5(md5), crop, tile_size, local_path)
+}
+
+/// Try to populate `local_path` from S3 using `key` as the cache-key
+/// component. Returns true on success. Any error (bucket disabled,
+/// NoSuchKey, network) returns false.
+fn try_s3_pull_key(key: &str, crop: bool, tile_size: u32, local_path: &Path) -> bool {
     let h = match s3_handle() {
         Some(h) => h,
         None => return false,
     };
-    let key = s3_key(&h.prefix, md5, crop, tile_size);
+    let key = s3_key(&h.prefix, key, crop, tile_size);
     let t = Instant::now();
     let bytes_result = h.runtime.block_on(async {
         let resp = h
@@ -590,13 +639,14 @@ fn try_s3_pull(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) ->
     }
 }
 
-/// Best-effort PUT of `local_path` contents to S3. Failures are logged once.
-fn try_s3_push(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) {
+/// Best-effort PUT of `local_path` contents to S3 using `key` as the
+/// cache-key component. Failures are logged once.
+fn try_s3_push_key(key: &str, crop: bool, tile_size: u32, local_path: &Path) {
     let h = match s3_handle() {
         Some(h) => h,
         None => return,
     };
-    let key = s3_key(&h.prefix, md5, crop, tile_size);
+    let key = s3_key(&h.prefix, key, crop, tile_size);
     let bytes = match std::fs::read(local_path) {
         Ok(b) => b,
         Err(_) => return,
@@ -781,7 +831,7 @@ mod tests {
     fn test_prepare_tile() {
         let path = Path::new("example/warhol.png");
         let tile_size = 32;
-        let result = prepare_tile(path, tile_size, true, false);
+        let result = prepare_tile(path, tile_size, true, false, None);
         assert!(result.is_ok());
         let tile_img = result.unwrap();
         assert_eq!(tile_img.width(), tile_size);
