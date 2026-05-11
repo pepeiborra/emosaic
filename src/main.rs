@@ -424,8 +424,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             print_runtime_stats(start_time, &memory_monitor);
         }
         Some(SubCommand::Mosaic(args)) => {
-            // Validate tiles directory
-            validate_tiles_directory(&args.tiles_dir)?;
+            // Parse tiles_dir into a TileSource: an s3://bucket/prefix/ URI
+            // becomes TileSource::S3, anything else is treated as a local
+            // filesystem path (and only Local paths get the exists/is-dir
+            // validation — we can't stat an S3 prefix locally).
+            let tiles_source = TileSource::parse(&args.tiles_dir.to_string_lossy());
+            if let TileSource::Local(p) = &tiles_source {
+                validate_tiles_directory(p)?;
+            }
 
             let mode = args.mode;
             let tint_opacity = args.tint_opacity;
@@ -437,25 +443,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_rgb8();
 
             let img_and_stats = match mode {
-                Mode::_1 => n_to_1::<1>(args, &img, tile_size, crop, mode, tint_opacity as f32),
-                Mode::_2 => n_to_1::<4>(args, &img, tile_size, crop, mode, tint_opacity as f32),
-                Mode::_3 => n_to_1::<9>(args, &img, tile_size, crop, mode, tint_opacity as f32),
-                Mode::_4 => n_to_1::<16>(args, &img, tile_size, crop, mode, tint_opacity as f32),
-                Mode::_5 => n_to_1::<25>(args, &img, tile_size, crop, mode, tint_opacity as f32),
-                Mode::_6 => n_to_1::<36>(args, &img, tile_size, crop, mode, tint_opacity as f32),
-                Mode::_8 => n_to_1::<64>(args, &img, tile_size, crop, mode, tint_opacity as f32),
-                Mode::_16 => n_to_1::<256>(args, &img, tile_size, crop, mode, tint_opacity as f32),
-                Mode::_32 => n_to_1::<1024>(args, &img, tile_size, crop, mode, tint_opacity as f32),
-                Mode::_64 => n_to_1::<4096>(args, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_1 => n_to_1::<1>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_2 => n_to_1::<4>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_3 => n_to_1::<9>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_4 => n_to_1::<16>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_5 => n_to_1::<25>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_6 => n_to_1::<36>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_8 => n_to_1::<64>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_16 => n_to_1::<256>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_32 => n_to_1::<1024>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32),
+                Mode::_64 => n_to_1::<4096>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32),
                 Mode::_128 => {
-                    n_to_1::<16384>(args, &img, tile_size, crop, mode, tint_opacity as f32)
+                    n_to_1::<16384>(args, &tiles_source, &img, tile_size, crop, mode, tint_opacity as f32)
                 }
                 Mode::Random => {
                     let extensions: HashSet<String> =
                         args.extensions.iter().map(|x| x.to_lowercase()).collect();
-                    let source = TileSource::Local(args.tiles_dir.clone());
                     let tile_refs = enumerate_tiles(
-                        &source,
+                        &tiles_source,
                         |ext| {
                             ext.to_str()
                                 .map(|s| extensions.contains(&s.to_lowercase()))
@@ -472,10 +477,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })?;
                     let mut tile_set = TileSet::<()>::new();
                     for tile in tile_refs {
-                        let path_buf = tile.local_path();
-                        if path_buf.exists() {
-                            tile_set.push_tile(path_buf, ());
-                        }
+                        // enumerate_tiles already filtered by extension and
+                        // (for Local sources) verified the file exists. For
+                        // S3 sources we trust the listing.
+                        tile_set.push_tile(tile.local_path(), ());
                     }
                     eprintln!("Tile set with {} tiles", tile_set.len());
                     Ok(ImgAndStats {
@@ -611,6 +616,7 @@ struct ImgAndStats {
 
 fn n_to_1<const N: usize>(
     mosaic_args: Mosaic,
+    tiles_source: &TileSource,
     original_img: &image::ImageBuffer<image::Rgb<u8>, Vec<u8>>,
     tile_size: u32,
     crop: bool,
@@ -634,6 +640,7 @@ where
         exclude_folder,
         ..
     } = mosaic_args;
+    let _ = tiles_dir; // moved into tiles_source by the caller
 
     let dim = (N as f64).sqrt() as u32;
 
@@ -681,7 +688,7 @@ where
     }
     let extensions: HashSet<_> = extensions.iter().map(|x| x.to_lowercase()).collect();
     let tile_set: TileSet<[Rgb<u8>; N]> =
-        generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop, force, &exclude_folder)
+        generate_tile_set::<N>(tiles_source, tile_size, extensions, crop, force, &exclude_folder)
             .unwrap();
     eprintln!("Tile set with {} tiles", tile_set.len());
     let result = if no_repeat && !greedy {
@@ -734,7 +741,7 @@ where
             tint_opacity,
             downsample: downsample.into(),
             randomize,
-            tiles_dir: tiles_dir.display().to_string(),
+            tiles_dir: tile_source_display(tiles_source),
             title: title.clone(),
         };
 
@@ -763,8 +770,16 @@ where
     })
 }
 
+/// Human-readable display string for a tile source (used in stats/output).
+fn tile_source_display(source: &TileSource) -> String {
+    match source {
+        TileSource::Local(p) => p.display().to_string(),
+        TileSource::S3 { bucket, prefix } => format!("s3://{}/{}", bucket, prefix),
+    }
+}
+
 fn generate_tile_set<const N: usize>(
-    tiles_path: &Path,
+    tiles_source: &TileSource,
     tile_size: u32,
     extensions: HashSet<String>,
     crop: bool,
@@ -775,9 +790,8 @@ where
     // TileSet<T>: Serialize,
     // T: std::hash::Hash + Eq + Copy,
 {
-    let source = TileSource::Local(tiles_path.to_owned());
     let tile_refs = enumerate_tiles(
-        &source,
+        tiles_source,
         |ext: &OsStr| {
             ext.to_str()
                 .map(|s| extensions.contains(&s.to_lowercase()))
@@ -820,7 +834,7 @@ where
         .into_par_iter()
         .map(|tile| {
             let path = tile.local_path();
-            let locator = tile.locator_in(&source);
+            let locator = tile.locator_in(tiles_source);
             let img_and_date = prepare_tile_with_date(locator, tile_size, crop, force);
             (path, img_and_date)
         })
@@ -833,9 +847,16 @@ where
         .filter_map(|x| match x {
             (path, Ok((img, date_taken))) => Some((path, img, date_taken)),
             (path, Err(error)) => {
-                let path = path.strip_prefix(tiles_path).unwrap();
+                // For Local sources, strip the tiles_path prefix to keep
+                // error log lines short; for S3 sources `path` already
+                // holds a synthesised "s3://bucket/key" string from
+                // err_path_for, so we leave it as-is.
+                let display_path = match tiles_source {
+                    TileSource::Local(root) => path.strip_prefix(root).unwrap_or(&path).to_owned(),
+                    TileSource::S3 { .. } => path,
+                };
                 errors.write().unwrap().push(ImageError {
-                    path: path.to_owned(),
+                    path: display_path,
                     ..error
                 });
                 None
