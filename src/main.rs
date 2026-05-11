@@ -22,11 +22,11 @@ use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::image::find_images;
 use mosaic::stats::MosaicConfig;
 use mosaic::tiles::{
-    persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_with_date,
-    read_tileset_from_file, s3_put_stats, write_tileset_to_file, Tile, TileSet,
+    persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_with_date, s3_put_stats, Tile,
+    TileSet,
 };
 use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -657,11 +657,6 @@ where
 
     let img = imageops::resize(original_img, nwidth, nheight, FilterType::Lanczos3);
 
-    let analysis_cache_path = tiles_dir.join(format!(
-        ".emosaic_v2_{}to1{}",
-        N,
-        if crop { "_cropped" } else { "" }
-    ));
     // Validate the source image dimensions
     if img.width() % dim != 0 || img.height() % dim != 0 {
         eprintln!(
@@ -677,55 +672,8 @@ where
         std::process::exit(1);
     }
     let extensions: HashSet<_> = extensions.iter().map(|x| x.to_lowercase()).collect();
-    let cached_tileset = if force {
-        None
-    } else {
-        read_tileset_from_file::<N>(&analysis_cache_path, &tiles_dir).ok()
-    };
-    let tile_set: TileSet<[Rgb<u8>; N]> = cached_tileset
-        .map(|analysis| {
-            eprintln!("Reusing analysis cache");
-            // Filter out tiles for files that no longer exist or don't match extensions
-            let valid_data: Vec<_> = analysis
-                .tiles
-                .par_iter()
-                .filter_map(|tile| {
-                    let path = analysis.get_path(tile);
-                    let extension = path.extension()?.to_str()?.to_lowercase();
-                    if path.exists() && extensions.contains(&extension) {
-                        Some((path.to_owned(), tile.clone()))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            
-            // Create new TileSet from valid tiles, renumbering indices sequentially
-            let (paths, tiles): (Vec<PathBuf>, Vec<Tile<[Rgb<u8>; N]>>) = valid_data.into_iter().unzip();
-            let renumbered_tiles: Vec<Tile<[Rgb<u8>; N]>> = tiles
-                .into_iter()
-                .enumerate()
-                .map(|(i, tile)| Tile {
-                    idx: (i + 1) as u16,
-                    colors: tile.colors,
-                    flipped: tile.flipped,
-                    date_taken: tile.date_taken,
-                })
-                .collect();
-            TileSet::from_tiles(renumbered_tiles, paths)
-        })
-        .unwrap_or_else(|| {
-            let extensions = extensions.clone();
-            let tile_set = generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop, force).unwrap();
-            if let Err(e) = write_tileset_to_file(&tile_set, &analysis_cache_path, &tiles_dir) {
-                eprintln!(
-                    "⚠️  Could not write analysis cache to {}: {}",
-                    analysis_cache_path.display(),
-                    e
-                );
-            }
-            tile_set
-        });
+    let tile_set: TileSet<[Rgb<u8>; N]> =
+        generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop, force).unwrap();
     eprintln!("Tile set with {} tiles", tile_set.len());
     let result = if no_repeat && !greedy {
         render_nto1_no_repeat(&img, tile_set, tile_size)?
