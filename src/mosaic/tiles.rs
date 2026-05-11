@@ -2,7 +2,7 @@ use typenum::U0;
 
 // Re-export the main types and functions from the focused modules
 #[allow(unused_imports)]
-pub use source::{enumerate_tiles, TileRef, TileSource};
+pub use source::{enumerate_tiles, TileLocator, TileRef, TileSource};
 pub use tile::Tile;
 pub use tileset::TileSet;
 pub use utils::{

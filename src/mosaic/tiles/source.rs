@@ -35,6 +35,40 @@ impl TileSource {
     }
 }
 
+/// Where the raw bytes of a particular tile live. Constructed per-tile
+/// from a `TileSource` + `TileRef`; consumed by `prepare_tile` to decide
+/// how to fetch the source image when the cache misses.
+#[derive(Debug, Clone, Copy)]
+pub enum TileLocator<'a> {
+    Local(&'a Path),
+    S3 {
+        bucket: &'a str,
+        key: &'a str,
+        etag: &'a str,
+    },
+}
+
+impl TileRef {
+    /// Construct a TileLocator for this tile given the source it came from.
+    pub fn locator_in<'a>(&'a self, source: &'a TileSource) -> TileLocator<'a> {
+        match source {
+            TileSource::Local(_) => TileLocator::Local(Path::new(&self.id)),
+            TileSource::S3 { bucket, .. } => TileLocator::S3 {
+                bucket,
+                key: &self.id,
+                etag: self.etag.as_deref().unwrap_or(""),
+            },
+        }
+    }
+
+    /// A best-effort short label for error/log lines: filename for Local
+    /// sources, S3 key tail for S3 sources.
+    #[allow(dead_code)]
+    pub fn display_name(&self) -> &str {
+        self.id.rsplit('/').next().unwrap_or(&self.id)
+    }
+}
+
 /// A single tile in a tile set, opaque to the rendering pipeline.
 ///
 /// `id` is an absolute local path for Local sources and an S3 key for S3
@@ -86,10 +120,67 @@ pub fn enumerate_tiles(
                 .collect();
             Ok(refs)
         }
-        TileSource::S3 { .. } => {
-            unimplemented!("S3 enumeration lands in the next commit");
+        TileSource::S3 { bucket, prefix } => enumerate_s3(bucket, prefix, extension, excluded_folders),
+    }
+}
+
+fn enumerate_s3(
+    bucket: &str,
+    prefix: &str,
+    extension: impl Fn(&OsStr) -> bool,
+    excluded_folders: &[String],
+) -> io::Result<Vec<TileRef>> {
+    let h = crate::mosaic::tiles::utils::s3_handle_for_listing()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "S3 client could not be initialised"))?;
+    let mut refs: Vec<TileRef> = Vec::new();
+    let mut continuation: Option<String> = None;
+    loop {
+        let mut req = h
+            .client
+            .list_objects_v2()
+            .bucket(bucket)
+            .prefix(prefix);
+        if let Some(token) = &continuation {
+            req = req.continuation_token(token);
+        }
+        let resp = h
+            .runtime
+            .block_on(async { req.send().await })
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ListObjectsV2: {}", e)))?;
+        if let Some(contents) = resp.contents {
+            for obj in contents {
+                let key = match obj.key {
+                    Some(k) => k,
+                    None => continue,
+                };
+                // Extension filter
+                let ext = key.rsplit('.').next().unwrap_or("");
+                if !extension(OsStr::new(ext)) {
+                    continue;
+                }
+                // Excluded-folder filter: skip if any path component after
+                // the prefix matches an excluded name.
+                let rel = key.strip_prefix(prefix).unwrap_or(&key);
+                if rel.split('/').any(|seg| excluded_folders.iter().any(|e| e == seg)) {
+                    continue;
+                }
+                refs.push(TileRef {
+                    id: key,
+                    size: obj.size.unwrap_or(0) as u64,
+                    etag: obj.e_tag,
+                });
+            }
+        }
+        if resp.is_truncated.unwrap_or(false) {
+            continuation = resp.next_continuation_token;
+            if continuation.is_none() {
+                break;
+            }
+        } else {
+            break;
         }
     }
+    Ok(refs)
 }
 
 fn path_is_excluded(path: &Path, root: &Path, excluded: &[String]) -> bool {

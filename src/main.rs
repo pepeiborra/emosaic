@@ -22,7 +22,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::stats::MosaicConfig;
 use mosaic::tiles::{
     enumerate_tiles, persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_with_date,
-    s3_put_stats, Tile, TileSet, TileSource,
+    s3_put_stats, Tile, TileLocator, TileSet, TileSource,
 };
 use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -412,7 +412,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match subcmd {
         None => (),
         Some(SubCommand::Prepare(args)) => {
-            let tile = prepare_tile(&img, tile_size, crop, args.force, None)
+            let tile = prepare_tile(TileLocator::Local(&img), tile_size, crop, args.force)
                 .map_err(|e| format!("Failed to prepare tile from {}: {}", img.display(), e))?;
             tile.save(&output_path)
                 .map_err(|e| format!("Failed to save tile to {}: {}", output_path.display(), e))?;
@@ -812,8 +812,8 @@ where
         .into_par_iter()
         .map(|tile| {
             let path = tile.local_path();
-            let img_and_date =
-                prepare_tile_with_date(&path, tile_size, crop, force, tile.etag.as_deref());
+            let locator = tile.locator_in(&source);
+            let img_and_date = prepare_tile_with_date(locator, tile_size, crop, force);
             (path, img_and_date)
         })
         .inspect(|(_, r)| {

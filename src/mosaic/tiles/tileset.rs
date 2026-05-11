@@ -12,6 +12,7 @@ use rayon::iter::ParallelIterator;
 use serde::ser::SerializeTuple;
 use serde::{Deserialize, Serialize};
 
+use super::source::TileLocator;
 use super::tile::Tile;
 use super::utils::{flipped_coords, prepare_tile};
 use super::SIZE;
@@ -153,7 +154,13 @@ impl<T> TileSet<T> {
             .images
             .get(&tile.idx)
             .map_or_else(
-                || prepare_tile(path, tile_size, true, false, None),
+                // get_image is called during render; in S3 source mode it
+                // assumes Cache 1 was warmed during analysis (the etag fast
+                // path would have returned from the in-memory image map or
+                // disk cache). The Local locator here is fine for render-
+                // time fallbacks since the prepared tile's bytes live on
+                // disk regardless of the original source.
+                || prepare_tile(TileLocator::Local(path), tile_size, true, false),
                 |x| Ok(x.clone()),
             )?;
         Ok(if tile.flipped {

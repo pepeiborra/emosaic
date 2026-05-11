@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
 use crate::mosaic::error::ImageError;
+use crate::mosaic::tiles::source::TileLocator;
 
 /// Flip coordinates horizontally for tile flipping operations.
 pub fn flipped_coords<A, const N: usize>(coords: &mut [A; N]) {
@@ -57,12 +58,15 @@ pub fn flipped_coords<A, const N: usize>(coords: &mut [A; N]) {
 const PREPARE_TILE_CACHE_VERSION: u32 = 2;
 
 /// Prepare a tile image by resizing, cropping, and caching it, and extract date information.
+///
+/// For Local sources the date is read from EXIF (or falls back to year-in-path).
+/// For S3 sources we skip the EXIF probe (would require an extra GetObject) and
+/// rely solely on the year-in-path heuristic against the S3 key.
 pub fn prepare_tile_with_date(
-    path: &Path,
+    locator: TileLocator<'_>,
     tile_size: u32,
     crop: bool,
     force: bool,
-    etag: Option<&str>,
 ) -> Result<
     (
         ::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>,
@@ -70,9 +74,11 @@ pub fn prepare_tile_with_date(
     ),
     ImageError,
 > {
-    // Try EXIF date first, then fall back to extracting year from file path
-    let date_taken = get_exif_date(path).or_else(|| get_year_from_path(path));
-    let image = prepare_tile(path, tile_size, crop, force, etag)?;
+    let date_taken = match locator {
+        TileLocator::Local(path) => get_exif_date(path).or_else(|| get_year_from_path(path)),
+        TileLocator::S3 { key, .. } => get_year_from_path(Path::new(key)),
+    };
+    let image = prepare_tile(locator, tile_size, crop, force)?;
     Ok((image, date_taken))
 }
 
@@ -86,23 +92,23 @@ pub fn prepare_tile_with_date(
 /// can't be located or written to, a one-shot warning is emitted to stderr and the
 /// function still returns the prepared tile.
 pub fn prepare_tile(
-    path: &Path,
+    locator: TileLocator<'_>,
     tile_size: u32,
     crop: bool,
     force: bool,
-    etag: Option<&str>,
 ) -> Result<::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>, ImageError> {
-    // === Etag fast path: when an S3 source supplies the cache key directly,
-    //                     we never need to read or hash the raw tile bytes
-    //                     on a cache hit.
+    // === Phase 1: cache hit without raw-byte fetch ===
+    //
+    // For S3 sources the etag is the cache key directly. For Local sources
+    // we consult the metadata index (path → mtime → md5) which lets us skip
+    // re-hashing unchanged files.
     if !force {
-        if let Some(etag) = etag {
-            let key = normalise_etag(etag);
-            if let Some(cache_path) = cache_path_for_key(key, crop, tile_size) {
+        if let Some(key) = try_cache_key_without_bytes(locator) {
+            if let Some(cache_path) = cache_path_for_key(&key, crop, tile_size) {
                 if let Ok(img) = ::image::open(&cache_path) {
                     return Ok(img.to_rgb8());
                 }
-                if try_s3_pull_key(key, crop, tile_size, &cache_path) {
+                if try_s3_pull_key(&key, crop, tile_size, &cache_path) {
                     if let Ok(img) = ::image::open(&cache_path) {
                         return Ok(img.to_rgb8());
                     }
@@ -111,31 +117,7 @@ pub fn prepare_tile(
         }
     }
 
-    // === MD5 fast path: try to skip reading the full file when
-    //                    (path, mtime, size) still matches an indexed
-    //                    (md5, cache file) pair. Local source only.
-    if !force && etag.is_none() {
-        if let Some(meta_key) = metadata_key(path) {
-            if let Some(known_md5) = lookup_index(path, &meta_key) {
-                if let Some(cache_path) = cache_path_for(known_md5, crop, tile_size) {
-                    if let Ok(img) = ::image::open(&cache_path) {
-                        return Ok(img.to_rgb8());
-                    }
-                    // Local miss for an indexed entry: try S3 before falling
-                    // through to the slow path's full file read + hash.
-                    if try_s3_pull(&known_md5, crop, tile_size, &cache_path) {
-                        if let Ok(img) = ::image::open(&cache_path) {
-                            return Ok(img.to_rgb8());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // === Slow path: read full bytes, then prepare. Cache key depends on
-    //                whether the caller supplied an etag (S3 source) or we
-    //                fall back to content MD5 (Local source).
+    // === Phase 2: cache miss; fetch raw bytes + prep + write cache ===
     // Wall-clock via a Drop guard; we subtract this thread's S3 duration
     // (accumulated by record_s3_dur) to get the CPU-only contribution
     // before adding to the global CPU_NS counter.
@@ -143,14 +125,16 @@ pub fn prepare_tile(
     let _cpu_timer = CpuTimerGuard {
         start: Instant::now(),
     };
-    let bytes = std::fs::read(path).map_err(|e| ImageError {
-        path: path.to_owned(),
-        error: e.into(),
-    })?;
-    let cache_key: String = match etag {
-        Some(e) => normalise_etag(e).to_owned(),
-        None => {
-            let h = md5::compute(&bytes);
+
+    let err_path = err_path_for(locator);
+    let raw_bytes = fetch_raw_bytes(locator)?;
+
+    // Determine cache key (S3 etag wins; Local computes MD5 and updates the
+    // metadata index in the process).
+    let cache_key: String = match locator {
+        TileLocator::S3 { etag, .. } => normalise_etag(etag).to_owned(),
+        TileLocator::Local(path) => {
+            let h = md5::compute(&raw_bytes);
             if let Some(meta_key) = metadata_key(path) {
                 update_index(path, meta_key, h.0);
             }
@@ -158,182 +142,240 @@ pub fn prepare_tile(
         }
     };
 
-    let cache_paths: Option<(PathBuf, PathBuf)> = dirs::cache_dir().map(|d| {
-        let cache_dir = d.join("mosaic");
-        let cache_path = cache_path_for_key(&cache_key, crop, tile_size).unwrap_or_else(|| {
-            cache_dir.join(format!(
-                "{}{}.v{}.{}.png",
-                cache_key,
-                if crop { "_cropped" } else { "" },
-                PREPARE_TILE_CACHE_VERSION,
-                tile_size
-            ))
-        });
-        (cache_dir, cache_path)
-    });
-    if cache_paths.is_none() {
+    let cache_path_opt: Option<PathBuf> = cache_path_for_key(&cache_key, crop, tile_size);
+    if cache_path_opt.is_none() {
         warn_once_no_cache_dir();
     }
-    // check if the cache path exists and load it, otherwise resize and save it
-    let cached_img: Result<::image::ImageBuffer<_, _>, _> = if force {
-        Err(ImageError {
-            path: path.to_owned(),
-            error: ::image::ImageError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "force",
+
+    // === Re-check the cache now that we know the key (Local source's
+    //     post-MD5 entry; or S3 entry the etag fast path skipped because
+    //     of a transient I/O glitch). Avoids redundant prep + re-upload.
+    if !force {
+        if let Some(cache_path) = &cache_path_opt {
+            if let Ok(img) = ::image::open(cache_path) {
+                return Ok(img.to_rgb8());
+            }
+            if try_s3_pull_key(&cache_key, crop, tile_size, cache_path) {
+                if let Ok(img) = ::image::open(cache_path) {
+                    return Ok(img.to_rgb8());
+                }
+            }
+        }
+    }
+
+    // === Full prep from raw_bytes ===
+    let mut tile_img = ::image::load_from_memory(&raw_bytes)
+        .map_err(|e| ImageError {
+            path: err_path.clone(),
+            error: e,
+        })?
+        .to_rgb8();
+    let orientation = jpeg_orientation_from_bytes(&raw_bytes).unwrap_or(1);
+    // Drop raw_bytes early — the prep is significant memory pressure
+    drop(raw_bytes);
+
+    // Crop all the white pixels from the edges
+    let is_white_pixel = |pixel: &Rgb<u8>| pixel[0] > 240 && pixel[1] > 240 && pixel[2] > 240;
+
+    let w = tile_img.width();
+    let h = tile_img.height();
+
+    if w < tile_size || h < tile_size {
+        return Err(ImageError {
+            path: err_path.clone(),
+            error: ::image::ImageError::Limits(LimitError::from_kind(
+                image::error::LimitErrorKind::DimensionError,
             )),
-        })
-    } else if let Some((_, cache_path)) = &cache_paths {
-        let local = ::image::open(cache_path).map(|img| img.to_rgb8());
-        if local.is_ok() {
-            local.map_err(|e| ImageError {
-                path: path.to_owned(),
-                error: e,
-            })
-        } else if try_s3_pull_key(&cache_key, crop, tile_size, cache_path) {
-            ::image::open(cache_path)
-                .map_err(|e| ImageError {
-                    path: path.to_owned(),
-                    error: e,
+        });
+    }
+
+    let from_left: Vec<u32> = (0..h)
+        .map(|y| {
+            (0..w)
+                .find(|x| {
+                    let pixel = tile_img.get_pixel(*x, y);
+                    !is_white_pixel(pixel)
                 })
-                .map(|img| img.to_rgb8())
-        } else {
-            Err(ImageError {
-                path: path.to_owned(),
-                error: ::image::ImageError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "local cache miss; S3 miss or disabled",
-                )),
-            })
-        }
-    } else {
-        Err(ImageError {
-            path: path.to_owned(),
-            error: ::image::ImageError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "no cache dir",
-            )),
+                .unwrap_or(w)
         })
-    };
-    cached_img.or_else(|_| {
-        let mut tile_img = ::image::open(path)
-            .map_err(|e| ImageError {
-                path: path.to_owned(),
-                error: e,
-            })?
-            .to_rgb8();
-        // Crop all the white pixels from the edges
-        let is_white_pixel = |pixel: &Rgb<u8>| pixel[0] > 240 && pixel[1] > 240 && pixel[2] > 240;
+        .collect();
 
-        let w = tile_img.width();
-        let h = tile_img.height();
+    let from_right: Vec<u32> = from_left
+        .iter()
+        .enumerate()
+        .map(|(y, x)| {
+            (*x..w)
+                .rev()
+                .find(|x| {
+                    let pixel = tile_img.get_pixel(*x, y as u32);
+                    !is_white_pixel(pixel)
+                })
+                .unwrap_or(0)
+        })
+        .collect();
 
-        if w < tile_size || h < tile_size {
-            return Err(ImageError {
-                path: path.to_owned(),
-                error: ::image::ImageError::Limits(LimitError::from_kind(
-                    image::error::LimitErrorKind::DimensionError,
-                )),
-            });
-        }
+    let from_top: Vec<u32> = (0..w)
+        .map(|x| {
+            (0..h)
+                .find(|y| {
+                    let pixel = tile_img.get_pixel(x, *y);
+                    !is_white_pixel(pixel)
+                })
+                .unwrap_or(h)
+        })
+        .collect();
 
-        let from_left: Vec<u32> = (0..h)
-            .map(|y| {
-                (0..w)
-                    .find(|x| {
-                        let pixel = tile_img.get_pixel(*x, y);
-                        !is_white_pixel(pixel)
-                    })
-                    .unwrap_or(w)
-            })
-            .collect();
+    let from_bottom: Vec<u32> = from_top
+        .iter()
+        .enumerate()
+        .map(|(x, y)| {
+            (*y..h)
+                .rev()
+                .find(|y| {
+                    let pixel = tile_img.get_pixel(x as u32, *y);
+                    !is_white_pixel(pixel)
+                })
+                .unwrap_or(0)
+        })
+        .collect();
 
-        let from_right: Vec<u32> = from_left
-            .iter()
-            .enumerate()
-            .map(|(y, x)| {
-                (*x..w)
-                    .rev()
-                    .find(|x| {
-                        let pixel = tile_img.get_pixel(*x, y as u32);
-                        !is_white_pixel(pixel)
-                    })
-                    .unwrap_or(0)
-            })
-            .collect();
+    let first_non_white_col = most_common_value(from_left.into_iter().filter(|x| *x != w));
+    let last_non_white_col = most_common_value(from_right.into_iter().filter(|x| *x != 0));
+    let first_non_white_row = most_common_value(from_top.into_iter().filter(|x| *x != h));
+    let last_non_white_row = most_common_value(from_bottom.into_iter().filter(|x| *x != 0));
 
-        let from_top: Vec<u32> = (0..w)
-            .map(|x| {
-                (0..h)
-                    .find(|y| {
-                        let pixel = tile_img.get_pixel(x, *y);
-                        !is_white_pixel(pixel)
-                    })
-                    .unwrap_or(h)
-            })
-            .collect();
+    assert!(first_non_white_col < last_non_white_col);
+    assert!(first_non_white_row < last_non_white_row);
 
-        let from_bottom: Vec<u32> = from_top
-            .iter()
-            .enumerate()
-            .map(|(x, y)| {
-                (*y..h)
-                    .rev()
-                    .find(|y| {
-                        let pixel = tile_img.get_pixel(x as u32, *y);
-                        !is_white_pixel(pixel)
-                    })
-                    .unwrap_or(0)
-            })
-            .collect();
+    let w = last_non_white_col - first_non_white_col;
+    let h = last_non_white_row - first_non_white_row;
 
-        let first_non_white_col = most_common_value(from_left.into_iter().filter(|x| *x != w));
-        let last_non_white_col = most_common_value(from_right.into_iter().filter(|x| *x != 0));
-        let first_non_white_row = most_common_value(from_top.into_iter().filter(|x| *x != h));
-        let last_non_white_row = most_common_value(from_bottom.into_iter().filter(|x| *x != 0));
-
-        assert!(first_non_white_col < last_non_white_col);
-        assert!(first_non_white_row < last_non_white_row);
-
-        let w = last_non_white_col - first_non_white_col;
-        let h = last_non_white_row - first_non_white_row;
-
-        let mut tile_img = imageops::crop(
-            &mut tile_img,
-            first_non_white_col,
-            first_non_white_row,
-            w,
-            h,
+    let mut tile_img = imageops::crop(
+        &mut tile_img,
+        first_non_white_col,
+        first_non_white_row,
+        w,
+        h,
+    );
+    if crop {
+        // tiles must be square, so get the largest square that fits inside the image
+        let size = w.min(h);
+        let x0 = (w - size).div(2);
+        let y0 = (h - size).div(2);
+        tile_img.change_bounds(
+            first_non_white_col + x0,
+            first_non_white_row + y0,
+            size,
+            size,
         );
-        if crop {
-            // tiles must be square, so get the largest square that fits inside the image
-            let size = w.min(h);
-            let x0 = (w - size).div(2);
-            let y0 = (h - size).div(2);
-            tile_img.change_bounds(
-                first_non_white_col + x0,
-                first_non_white_row + y0,
-                size,
-                size,
-            );
-        }
+    }
 
-        let tile_img =
-            imageops::resize(tile_img.deref(), tile_size, tile_size, FilterType::Lanczos3);
-        let orientation = get_jpeg_orientation(path).unwrap_or(1);
-        let tile_img = rotate(tile_img.into(), orientation);
-        if let Some((cache_dir, cache_path)) = &cache_paths {
-            if let Err(e) = std::fs::create_dir_all(cache_dir)
-                .and_then(|_| tile_img.save(cache_path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
-            {
-                warn_once_cache_write_failed(cache_dir, &e);
+    let tile_img = imageops::resize(tile_img.deref(), tile_size, tile_size, FilterType::Lanczos3);
+    let tile_img = rotate(tile_img.into(), orientation);
+
+    if let Some(cache_path) = &cache_path_opt {
+        if let Some(parent) = cache_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent).and_then(|_| {
+                tile_img
+                    .save(cache_path)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            }) {
+                warn_once_cache_write_failed(parent, &e);
             } else {
                 // Best-effort write-through to S3; never fatal.
                 try_s3_push_key(&cache_key, crop, tile_size, cache_path);
             }
         }
-        Ok(tile_img.into())
-    })
+    }
+    Ok(tile_img.into())
+}
+
+/// Cache key derivable without reading the tile's raw bytes:
+/// - S3 source: the etag (always available).
+/// - Local source: only if the metadata index has a (path, mtime, size) → md5
+///   entry for this file.
+fn try_cache_key_without_bytes(locator: TileLocator<'_>) -> Option<String> {
+    match locator {
+        TileLocator::S3 { etag, .. } => {
+            let key = normalise_etag(etag);
+            if key.is_empty() {
+                None
+            } else {
+                Some(key.to_owned())
+            }
+        }
+        TileLocator::Local(path) => {
+            let mk = metadata_key(path)?;
+            let md5 = lookup_index(path, &mk)?;
+            Some(hex_md5(&md5))
+        }
+    }
+}
+
+/// Synthesise a path-shaped value to feed to ImageError for log clarity.
+fn err_path_for(locator: TileLocator<'_>) -> PathBuf {
+    match locator {
+        TileLocator::Local(p) => p.to_owned(),
+        TileLocator::S3 { bucket, key, .. } => PathBuf::from(format!("s3://{}/{}", bucket, key)),
+    }
+}
+
+/// Fetch a tile's raw bytes. For Local sources this is `std::fs::read`; for
+/// S3 sources it's a GetObject.
+fn fetch_raw_bytes(locator: TileLocator<'_>) -> Result<Vec<u8>, ImageError> {
+    match locator {
+        TileLocator::Local(path) => std::fs::read(path).map_err(|e| ImageError {
+            path: path.to_owned(),
+            error: e.into(),
+        }),
+        TileLocator::S3 { bucket, key, .. } => s3_get_raw(bucket, key).map_err(|e| ImageError {
+            path: PathBuf::from(format!("s3://{}/{}", bucket, key)),
+            error: ::image::ImageError::IoError(e),
+        }),
+    }
+}
+
+fn s3_get_raw(bucket: &str, key: &str) -> std::io::Result<Vec<u8>> {
+    let h = s3_handle_for_listing().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "S3 client unavailable (EMOSAIC_S3_CACHE_BUCKET unset?)",
+        )
+    })?;
+    let t = Instant::now();
+    let bytes = h.runtime.block_on(async {
+        let resp = h
+            .client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)))?;
+        let data = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("{}", e)))?;
+        Ok::<Vec<u8>, std::io::Error>(data.into_bytes().to_vec())
+    })?;
+    record_s3_dur(t.elapsed());
+    Ok(bytes)
+}
+
+/// Read EXIF Orientation from an in-memory JPEG buffer; returns 1 (default)
+/// when the image has no EXIF or isn't a JPEG.
+fn jpeg_orientation_from_bytes(bytes: &[u8]) -> Result<u32, exif::Error> {
+    let exifreader = exif::Reader::new();
+    let exif = exifreader.read_from_container(&mut std::io::Cursor::new(bytes))?;
+    let orientation = match exif.get_field(Tag::Orientation, In::PRIMARY) {
+        Some(o) => match o.value.get_uint(0) {
+            Some(v @ 1..=8) => v,
+            _ => 1,
+        },
+        None => 1,
+    };
+    Ok(orientation)
 }
 
 static WARN_NO_CACHE_DIR: Once = Once::new();
@@ -381,10 +423,6 @@ static INDEX: OnceLock<RwLock<IndexMap>> = OnceLock::new();
 
 fn index_path() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("mosaic").join("index.bin"))
-}
-
-fn cache_path_for(md5: [u8; 16], crop: bool, tile_size: u32) -> Option<PathBuf> {
-    cache_path_for_key(&hex_md5(&md5), crop, tile_size)
 }
 
 /// Resolve the local cache path for a given opaque cache key (hex MD5 for
@@ -477,11 +515,21 @@ fn update_index(path: &Path, key: (u64, u64), md5: [u8; 16]) {
 // fall through to the existing local-only behavior — the binary never
 // fails because S3 is misbehaving.
 
-struct S3Handle {
-    runtime: tokio::runtime::Runtime,
-    client: aws_sdk_s3::Client,
+pub(crate) struct S3Handle {
+    pub(crate) runtime: tokio::runtime::Runtime,
+    pub(crate) client: aws_sdk_s3::Client,
     bucket: String,
     prefix: String,
+}
+
+/// Expose the lazily-initialised S3 handle for use by callers that need
+/// the client + runtime but don't otherwise care about the cache bucket
+/// (e.g. ListObjectsV2 on a tile-source bucket). Requires the same
+/// EMOSAIC_S3_CACHE_BUCKET env var as cache operations — the client
+/// itself is bucket-agnostic, but we currently key its lifetime to that
+/// flag for simplicity.
+pub(crate) fn s3_handle_for_listing() -> Option<&'static S3Handle> {
+    s3_handle()
 }
 
 static S3_HANDLE: OnceLock<Option<S3Handle>> = OnceLock::new();
@@ -587,11 +635,6 @@ fn s3_key(prefix: &str, key: &str, crop: bool, tile_size: u32) -> String {
         PREPARE_TILE_CACHE_VERSION,
         tile_size
     )
-}
-
-/// MD5-keyed wrapper around `try_s3_pull_key` for the Local source path.
-fn try_s3_pull(md5: &[u8; 16], crop: bool, tile_size: u32, local_path: &Path) -> bool {
-    try_s3_pull_key(&hex_md5(md5), crop, tile_size, local_path)
 }
 
 /// Try to populate `local_path` from S3 using `key` as the cache-key
@@ -709,22 +752,6 @@ pub fn persist_tile_index() {
     }
 }
 
-fn get_jpeg_orientation(file_path: &Path) -> Result<u32, exif::Error> {
-    let file = std::fs::File::open(file_path).expect("problem opening the file");
-    let mut bufreader = std::io::BufReader::new(&file);
-    let exifreader = exif::Reader::new();
-    let exif = exifreader.read_from_container(&mut bufreader)?;
-    let orientation: u32 = match exif.get_field(Tag::Orientation, In::PRIMARY) {
-        Some(orientation) => match orientation.value.get_uint(0) {
-            Some(v @ 1..=8) => v,
-            _ => 1,
-        },
-        None => 1,
-    };
-
-    Ok(orientation)
-}
-
 /// Extract EXIF date information from an image file.
 fn get_exif_date(file_path: &Path) -> Option<String> {
     let file = std::fs::File::open(file_path).ok()?;
@@ -831,7 +858,7 @@ mod tests {
     fn test_prepare_tile() {
         let path = Path::new("example/warhol.png");
         let tile_size = 32;
-        let result = prepare_tile(path, tile_size, true, false, None);
+        let result = prepare_tile(TileLocator::Local(path), tile_size, true, false);
         assert!(result.is_ok());
         let tile_img = result.unwrap();
         assert_eq!(tile_img.width(), tile_size);
