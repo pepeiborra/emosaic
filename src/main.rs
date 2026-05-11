@@ -19,11 +19,10 @@ use clap::{self, Args, Parser, Subcommand, ValueEnum};
 use image::{imageops, ImageFormat, Rgb};
 
 use indicatif::{ProgressBar, ProgressStyle};
-use mosaic::image::find_images;
 use mosaic::stats::MosaicConfig;
 use mosaic::tiles::{
-    persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_with_date, s3_put_stats, Tile,
-    TileSet,
+    enumerate_tiles, persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_with_date,
+    s3_put_stats, Tile, TileSet, TileSource,
 };
 use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -449,25 +448,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Mode::Random => {
                     let extensions: HashSet<String> =
                         args.extensions.iter().map(|x| x.to_lowercase()).collect();
-                    let images = find_images(&args.tiles_dir, |ext| {
-                        ext.to_str()
-                            .map(|s| extensions.contains(&s.to_lowercase()))
-                            .unwrap_or(false)
-                    });
-                    let mut tile_set = TileSet::<()>::new();
-                    for path_buf in images.map_err(|e| {
+                    let source = TileSource::Local(args.tiles_dir.clone());
+                    let tile_refs = enumerate_tiles(
+                        &source,
+                        |ext| {
+                            ext.to_str()
+                                .map(|s| extensions.contains(&s.to_lowercase()))
+                                .unwrap_or(false)
+                        },
+                        &[],
+                    )
+                    .map_err(|e| {
                         format!(
                             "Failed to find images in {}: {}",
                             args.tiles_dir.display(),
                             e
                         )
-                    })? {
-                        if let Some(ext) = path_buf.extension() {
-                            if let Some(ext_str) = ext.to_str() {
-                                if extensions.contains(&ext_str.to_lowercase()) && path_buf.exists() {
-                                    tile_set.push_tile(path_buf, ());
-                                }
-                            }
+                    })?;
+                    let mut tile_set = TileSet::<()>::new();
+                    for tile in tile_refs {
+                        let path_buf = tile.local_path();
+                        if path_buf.exists() {
+                            tile_set.push_tile(path_buf, ());
                         }
                     }
                     eprintln!("Tile set with {} tiles", tile_set.len());
@@ -765,12 +767,17 @@ where
     // TileSet<T>: Serialize,
     // T: std::hash::Hash + Eq + Copy,
 {
-    let images_paths = find_images(tiles_path, |ext: &OsStr| {
-        ext.to_str()
-            .map(|s| extensions.contains(&s.to_lowercase()))
-            .unwrap_or(false)
-    })?;
-    let pb = ProgressBar::new(images_paths.len() as u64)
+    let source = TileSource::Local(tiles_path.to_owned());
+    let tile_refs = enumerate_tiles(
+        &source,
+        |ext: &OsStr| {
+            ext.to_str()
+                .map(|s| extensions.contains(&s.to_lowercase()))
+                .unwrap_or(false)
+        },
+        &[],
+    )?;
+    let pb = ProgressBar::new(tile_refs.len() as u64)
         .with_message("Analysing")
         .with_style(
             ProgressStyle::default_bar()
@@ -801,9 +808,10 @@ where
         }
     });
 
-    let tile_data: Vec<_> = images_paths
+    let tile_data: Vec<_> = tile_refs
         .into_par_iter()
-        .map(|path| {
+        .map(|tile| {
+            let path = tile.local_path();
             let img_and_date = prepare_tile_with_date(&path, tile_size, crop, force);
             (path, img_and_date)
         })

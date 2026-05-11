@@ -1,6 +1,8 @@
 use typenum::U0;
 
 // Re-export the main types and functions from the focused modules
+#[allow(unused_imports)]
+pub use source::{enumerate_tiles, TileRef, TileSource};
 pub use tile::Tile;
 pub use tileset::TileSet;
 pub use utils::{
@@ -12,6 +14,7 @@ pub use utils::{
 pub type SIZE = fixed::FixedU32<U0>;
 
 // Module declarations
+mod source;
 mod tile;
 mod tileset;
 mod utils;
