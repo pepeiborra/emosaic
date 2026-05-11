@@ -101,6 +101,11 @@ struct Mosaic {
     /// Extensions of image files in the tiles dir
     extensions: Vec<String>,
 
+    #[clap(long = "exclude-folder")]
+    /// Skip tiles inside the named subfolder of tiles_dir. Repeat the flag
+    /// for multiple folders. Matches each segment of the tile's path/key.
+    exclude_folder: Vec<String>,
+
     #[clap(long)]
     /// When combined with no-repeat, uses a less accurate but faster algorithm
     greedy: bool,
@@ -456,7 +461,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .map(|s| extensions.contains(&s.to_lowercase()))
                                 .unwrap_or(false)
                         },
-                        &[],
+                        &args.exclude_folder,
                     )
                     .map_err(|e| {
                         format!(
@@ -626,6 +631,7 @@ where
         html,
         web,
         title,
+        exclude_folder,
         ..
     } = mosaic_args;
 
@@ -675,7 +681,8 @@ where
     }
     let extensions: HashSet<_> = extensions.iter().map(|x| x.to_lowercase()).collect();
     let tile_set: TileSet<[Rgb<u8>; N]> =
-        generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop, force).unwrap();
+        generate_tile_set::<N>(&tiles_dir, tile_size, extensions, crop, force, &exclude_folder)
+            .unwrap();
     eprintln!("Tile set with {} tiles", tile_set.len());
     let result = if no_repeat && !greedy {
         render_nto1_no_repeat(&img, tile_set, tile_size)?
@@ -762,6 +769,7 @@ fn generate_tile_set<const N: usize>(
     extensions: HashSet<String>,
     crop: bool,
     force: bool,
+    excluded_folders: &[String],
 ) -> io::Result<TileSet<[Rgb<u8>; N]>>
 where
     // TileSet<T>: Serialize,
@@ -775,7 +783,7 @@ where
                 .map(|s| extensions.contains(&s.to_lowercase()))
                 .unwrap_or(false)
         },
-        &[],
+        excluded_folders,
     )?;
     let pb = ProgressBar::new(tile_refs.len() as u64)
         .with_message("Analysing")
