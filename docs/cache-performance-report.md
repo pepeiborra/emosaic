@@ -249,24 +249,26 @@ Where the win evaporates:
    and revB pays per-call S3 latency. (Out of scope for current
    prod jobs but worth knowing.)
 
-## 10. Blocker: `get_image` doesn't work for S3 tile-sets
+## 10. Bug (fixed): `get_image` didn't work for S3 tile-sets
+
+> **Status:** fixed. See "Fix landed" at the end of this section.
 
 Trying to simulate a fully S3-resident Fargate job with `mosaic
-s3://emosaic-tiles-prod/tiles/2024/ …` made analysis succeed and
-render panic:
+s3://emosaic-tiles-prod/tiles/2024/ …` originally made analysis
+succeed and render panic:
 
 ```
 thread '<unnamed>' panicked at src/mosaic/rendering.rs:224:13:
 Image not found: tiles/2024/20240225_143003.jpg
 ```
 
-Cause: `src/mosaic/tiles/tileset.rs:147-171::get_image` calls
+Cause: `src/mosaic/tiles/tileset.rs::get_image` called
 
 ```rust
 prepare_tile(TileLocator::Local(path), tile_size, true, false)
 ```
 
-unconditionally when `self.images` doesn't have the entry — which it
+unconditionally when `self.images` didn't have the entry — which it
 never does for mode-1 analysis. For an S3 tile-set, `path` is the
 S3 object key (e.g., `tiles/2024/20240225_143003.jpg`), not a
 filesystem path. So inside `prepare_tile`:
@@ -278,25 +280,28 @@ filesystem path. So inside `prepare_tile`:
   → ENOENT → returns `ImageError` → `get_image` returns `Err` →
   render `unwrap()` panics.
 
-The Cache 1 layer does *not* paper over this, because Phase 1's
-fast-path bails before ever consulting the cache file.
+The Cache 1 layer did *not* paper over this, because Phase 1's
+fast-path bailed before ever consulting the cache file.
 
-So **the S3-direct work as shipped (commits 1-6) only covers the
-analysis side**. A Fargate job using `s3://…` as the tile source
-crashes during render unless every tile happens to be reachable as a
-local filesystem path at the same string. Task #38 tracks the fix;
-task #32 (entrypoint + CFN) is blocked on it.
+### Fix landed
 
-### Fix sketch
+`TileSet` gained two fields: `source: TileSource` (what the set was
+built from) and `etags: Vec<Option<String>>` (one entry per tile, in
+the same order as `paths`). `get_image` now dispatches on
+`self.source`: it builds a `TileLocator::S3 { bucket, key, etag }`
+for S3 sources and the old `TileLocator::Local(path)` for Local
+sources. Per-tile ETags are captured in `generate_tile_set` from the
+`TileRef` stream and stored via `set_etags`.
 
-Either of:
+Verified: `mosaic s3://emosaic-tiles-prod/tiles/2024/ …` (with
+`EMOSAIC_LOCAL_CACHE=0`) now renders 22 source tiles into 728
+placements with `prepare_tile: 750 calls, fast-hit=750, slow-hit=0,
+full-prep=0` — every render call is served by the S3 cache via the
+new `TileLocator::S3` path. Real wall 11.17 s, total prepare wall
+120 s across 8 rayon threads.
 
-1. Store the `TileSource` (or a per-tile `TileLocator` factory) on the
-   `TileSet` at construction time, so `get_image` can reconstruct
-   `TileLocator::S3 { bucket, key, etag }` for S3 sources. Smaller
-   diff.
-2. Pass the `TileSource` into `get_image` at the render call site.
-   Cleaner API, more touch points.
+This unblocks task #32 (entrypoint + CFN — switch from `aws s3
+sync` to passing `s3://…` straight to the binary).
 
 ## 11. Outstanding questions
 
