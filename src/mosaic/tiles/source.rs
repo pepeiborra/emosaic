@@ -158,10 +158,11 @@ fn enumerate_s3(
                 if !extension(OsStr::new(ext)) {
                     continue;
                 }
-                // Excluded-folder filter: skip if any path component after
-                // the prefix matches an excluded name.
+                // Excluded-folder filter: skip if `rel` matches an entry
+                // — see `rel_is_excluded` for the two-mode semantics
+                // (single-segment match vs path-prefix match).
                 let rel = key.strip_prefix(prefix).unwrap_or(&key);
-                if rel.split('/').any(|seg| excluded_folders.iter().any(|e| e == seg)) {
+                if rel_is_excluded(rel, excluded_folders) {
                     continue;
                 }
                 refs.push(TileRef {
@@ -188,8 +189,71 @@ fn path_is_excluded(path: &Path, root: &Path, excluded: &[String]) -> bool {
         return false;
     }
     let rel = path.strip_prefix(root).unwrap_or(path);
-    rel.components().any(|c| {
-        let name = c.as_os_str().to_string_lossy();
-        excluded.iter().any(|e| e == &*name)
-    })
+    let rel_str = rel.to_string_lossy();
+    rel_is_excluded(&rel_str, excluded)
+}
+
+/// Match a key (relative to the tile-source root, with `/` separators) against
+/// a list of exclude patterns. Two modes, chosen per pattern by whether it
+/// contains a `/`:
+///
+/// - **Segment match** (no slash, e.g. `"thumbs"`): excludes the key when
+///   any path component equals the pattern. So `"thumbs"` excludes
+///   `a/thumbs/x.jpg` and `thumbs/x.jpg` but not `a/thumbsup.jpg`.
+/// - **Prefix match** (contains slash, e.g. `"Pilar/videos"`): excludes the
+///   key when it starts with `pattern/` (or equals the pattern itself).
+///   This is the entrypoint→binary equivalent of `aws s3 sync
+///   --exclude pattern/*`, which is how the previous (sync-based) Fargate
+///   flow handled nested folder exclusions.
+fn rel_is_excluded(rel: &str, excluded: &[String]) -> bool {
+    for e in excluded {
+        if e.is_empty() {
+            continue;
+        }
+        if e.contains('/') {
+            // Prefix match. Treat the pattern as a directory boundary.
+            let trimmed = e.trim_end_matches('/');
+            if rel == trimmed || rel.starts_with(&format!("{}/", trimmed)) {
+                return true;
+            }
+        } else if rel.split('/').any(|seg| seg == e) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rel_is_excluded;
+
+    #[test]
+    fn segment_match() {
+        let exc = &[String::from("thumbs")];
+        assert!(rel_is_excluded("a/thumbs/x.jpg", exc));
+        assert!(rel_is_excluded("thumbs/x.jpg", exc));
+        assert!(!rel_is_excluded("a/thumbsup.jpg", exc));
+        assert!(!rel_is_excluded("a/b/c.jpg", exc));
+    }
+
+    #[test]
+    fn prefix_match() {
+        let exc = &[String::from("Pilar/videos")];
+        assert!(rel_is_excluded("Pilar/videos/clip.jpg", exc));
+        assert!(rel_is_excluded("Pilar/videos/a/b.jpg", exc));
+        assert!(!rel_is_excluded("Pilar/photo.jpg", exc));
+        assert!(!rel_is_excluded("Other/Pilar/videos.jpg", exc));
+    }
+
+    #[test]
+    fn trailing_slash_ok() {
+        let exc = &[String::from("Pilar/videos/")];
+        assert!(rel_is_excluded("Pilar/videos/clip.jpg", exc));
+    }
+
+    #[test]
+    fn empty_pattern_ignored() {
+        let exc = &[String::from("")];
+        assert!(!rel_is_excluded("a/b.jpg", exc));
+    }
 }
