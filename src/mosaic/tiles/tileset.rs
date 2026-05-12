@@ -12,18 +12,25 @@ use rayon::iter::ParallelIterator;
 use serde::ser::SerializeTuple;
 use serde::{Deserialize, Serialize};
 
-use super::source::TileLocator;
+use super::source::{TileLocator, TileSource};
 use super::tile::Tile;
 use super::utils::{flipped_coords, prepare_tile};
 use super::SIZE;
 use crate::mosaic::error::ImageError;
 
 /// A collection of tiles used for mosaic generation.
+///
+/// `source` and `etags` are populated by the caller after construction (via
+/// `set_source` / `set_etags`); both default to "Local with no etag info" so
+/// that the many existing call sites (tests, `TileSet::new`, the legacy
+/// Deserialize impl) don't have to change.
 #[derive(Clone, Debug)]
 pub struct TileSet<T> {
     pub tiles: Vec<Tile<T>>,
     paths: Vec<PathBuf>,
+    etags: Vec<Option<String>>,
     images: HashMap<u16, ::image::ImageBuffer<Rgb<u8>, Vec<u8>>>,
+    source: TileSource,
 }
 
 impl<const N: usize> Serialize for TileSet<[Rgb<u8>; N]> {
@@ -81,13 +88,33 @@ impl<T> TileSet<T> {
         TileSet::from_tiles(vec![], vec![])
     }
 
-    /// Create a tile set from existing tiles and paths.
+    /// Create a tile set from existing tiles and paths. The source defaults
+    /// to `TileSource::Local` with no etag info; call `set_source` /
+    /// `set_etags` afterwards to override (S3-source code path needs both
+    /// so `get_image` can reconstruct a `TileLocator::S3`).
     pub fn from_tiles(tiles: Vec<Tile<T>>, paths: Vec<PathBuf>) -> TileSet<T> {
         TileSet::<T> {
             tiles,
             paths,
-            images: HashMap::new().into(),
+            etags: Vec::new(),
+            images: HashMap::new(),
+            source: TileSource::Local(PathBuf::new()),
         }
+    }
+
+    /// Set the tile source the set was built from. Used by `get_image` to
+    /// build the right `TileLocator` for render-time prepare_tile calls.
+    pub fn set_source(&mut self, source: TileSource) {
+        self.source = source;
+    }
+
+    /// Set the per-tile ETag list (one entry per `paths[i]`, in the same
+    /// order). Only meaningful when the source is `TileSource::S3`; ignored
+    /// otherwise. An empty vec or a `None` entry means "no etag known", and
+    /// `get_image` will pass an empty etag string to `prepare_tile` — which
+    /// will fall through to MD5 hashing of fetched bytes.
+    pub fn set_etags(&mut self, etags: Vec<Option<String>>) {
+        self.etags = etags;
     }
 
     /// Get a random tile from the set.
@@ -144,25 +171,40 @@ impl<T> TileSet<T> {
     }
 
     /// Get the image for a tile, loading it if necessary.
+    ///
+    /// Dispatches on `self.source` so the right `TileLocator` is built —
+    /// crucial for S3-source mode where the stored "path" is really the S3
+    /// object key and a `TileLocator::Local` fallback would `ENOENT`. The
+    /// per-tile ETag (when known) is plumbed through so prepare_tile's
+    /// fast-path doesn't have to hash bytes.
     pub fn get_image(
         &self,
         tile: &Tile<T>,
         tile_size: u32,
     ) -> Result<image::ImageBuffer<Rgb<u8>, Vec<u8>>, ImageError> {
         let path = self.get_path(tile);
-        let image = self
-            .images
-            .get(&tile.idx)
-            .map_or_else(
-                // get_image is called during render; in S3 source mode it
-                // assumes Cache 1 was warmed during analysis (the etag fast
-                // path would have returned from the in-memory image map or
-                // disk cache). The Local locator here is fine for render-
-                // time fallbacks since the prepared tile's bytes live on
-                // disk regardless of the original source.
-                || prepare_tile(TileLocator::Local(path), tile_size, true, false),
-                |x| Ok(x.clone()),
-            )?;
+        let image = self.images.get(&tile.idx).map_or_else(
+            || {
+                let locator = match &self.source {
+                    TileSource::Local(_) => TileLocator::Local(path),
+                    TileSource::S3 { bucket, .. } => {
+                        // Tile.idx is 1-based; etags is parallel to paths.
+                        let etag = self
+                            .etags
+                            .get((tile.idx as usize).saturating_sub(1))
+                            .and_then(|e| e.as_deref())
+                            .unwrap_or("");
+                        TileLocator::S3 {
+                            bucket: bucket.as_str(),
+                            key: path.to_str().unwrap_or(""),
+                            etag,
+                        }
+                    }
+                };
+                prepare_tile(locator, tile_size, true, false)
+            },
+            |x| Ok(x.clone()),
+        )?;
         Ok(if tile.flipped {
             image::imageops::flip_horizontal(&image)
         } else {
@@ -236,8 +278,10 @@ impl<T> FromIterator<(PathBuf, ::image::ImageBuffer<Rgb<u8>, Vec<u8>>, T)> for T
             .multiunzip();
         TileSet {
             tiles,
-            images,
             paths,
+            etags: Vec::new(),
+            images,
+            source: TileSource::Local(PathBuf::new()),
         }
     }
 }

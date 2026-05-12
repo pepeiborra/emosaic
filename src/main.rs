@@ -19,6 +19,7 @@ use clap::{self, Args, Parser, Subcommand, ValueEnum};
 use image::{imageops, ImageFormat, Rgb};
 
 use indicatif::{ProgressBar, ProgressStyle};
+use itertools::Itertools;
 use mosaic::stats::MosaicConfig;
 use mosaic::tiles::{
     enumerate_tiles, persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_telemetry,
@@ -848,19 +849,26 @@ where
         .into_par_iter()
         .map(|tile| {
             let path = tile.local_path();
-            let locator = tile.locator_in(tiles_source);
-            let img_and_date = prepare_tile_with_date(locator, tile_size, crop, force);
-            (path, img_and_date)
+            // Capture etag now so we can plumb it through to `TileSet` and
+            // reconstruct a `TileLocator::S3` at render time.
+            let etag = tile.etag.clone();
+            let img_and_date = prepare_tile_with_date(
+                tile.locator_in(tiles_source),
+                tile_size,
+                crop,
+                force,
+            );
+            (path, etag, img_and_date)
         })
-        .inspect(|(_, r)| {
+        .inspect(|(_, _, r)| {
             if r.is_err() {
                 err_for_inspect.fetch_add(1, Ordering::Relaxed);
             }
             pb_for_inc.inc(1);
         })
         .filter_map(|x| match x {
-            (path, Ok((img, date_taken))) => Some((path, img, date_taken)),
-            (path, Err(error)) => {
+            (path, etag, Ok((img, date_taken))) => Some((path, etag, img, date_taken)),
+            (path, _, Err(error)) => {
                 // For Local sources, strip the tiles_path prefix to keep
                 // error log lines short; for S3 sources `path` already
                 // holds a synthesised "s3://bucket/key" string from
@@ -909,24 +917,26 @@ where
 
     let dates = tile_data
         .iter()
-        .filter(|(_, _, date)| date.is_some())
+        .filter(|(_, _, _, date)| date.is_some())
         .count();
 
     // Create tiles with date information
-    let tiles: Vec<_> = tile_data
+    let tile_rows: Vec<(PathBuf, Option<String>, Tile<[Rgb<u8>; N]>)> = tile_data
         .into_iter()
         .enumerate()
-        .map(|(idx, (path, img, date_taken))| {
+        .map(|(idx, (path, etag, img, date_taken))| {
             let colors = analyse::<N>(img);
             let tile = Tile::new_with_date((idx + 1) as u16, colors, date_taken);
-            (path, tile)
+            (path, etag, tile)
         })
         .collect();
 
-    let tile_set = TileSet::from_tiles(
-        tiles.iter().map(|(_, tile)| tile.clone()).collect(),
-        tiles.into_iter().map(|(path, _)| path).collect(),
-    );
+    let (paths, etags, tile_objs): (Vec<PathBuf>, Vec<Option<String>>, Vec<Tile<[Rgb<u8>; N]>>) =
+        tile_rows.into_iter().multiunzip();
+
+    let mut tile_set = TileSet::from_tiles(tile_objs, paths);
+    tile_set.set_source(tiles_source.clone());
+    tile_set.set_etags(etags);
     let all_errors = errors.into_inner().unwrap();
     if !all_errors.is_empty() {
         eprintln!("Failed to read the following images({}):", all_errors.len());
