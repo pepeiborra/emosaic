@@ -21,8 +21,8 @@ use image::{imageops, ImageFormat, Rgb};
 use indicatif::{ProgressBar, ProgressStyle};
 use mosaic::stats::MosaicConfig;
 use mosaic::tiles::{
-    enumerate_tiles, persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_with_date,
-    s3_put_stats, Tile, TileLocator, TileSet, TileSource,
+    enumerate_tiles, persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_telemetry,
+    prepare_tile_with_date, s3_put_stats, Tile, TileLocator, TileSet, TileSource,
 };
 use mosaic::{analyse, render_nto1, render_nto1_no_repeat, render_random};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -279,6 +279,20 @@ fn print_runtime_stats(start_time: Instant, memory_monitor: &MemoryMonitor) {
 
     if total_secs >= 1.0 {
         eprintln!("   Peak memory usage: {} MB", memory_monitor.get_peak_mb());
+    }
+
+    let (calls, wall_ns, fast, slow, full) = prepare_tile_telemetry();
+    if calls > 0 {
+        let (_cpu_ns, s3_ns) = phase_time_ns();
+        eprintln!(
+            "   prepare_tile: {} calls, total wall {:.2}s (fast-hit={}, slow-hit={}, full-prep={})",
+            calls,
+            wall_ns as f64 / 1e9,
+            fast,
+            slow,
+            full,
+        );
+        eprintln!("   S3 wait: total {:.2}s across all threads", s3_ns as f64 / 1e9);
     }
 }
 

@@ -96,6 +96,15 @@ pub fn prepare_tile(
     crop: bool,
     force: bool,
 ) -> Result<::image::ImageBuffer<::image::Rgb<u8>, Vec<u8>>, ImageError> {
+    // Telemetry: count every prepare_tile call and accumulate its total
+    // wall time on drop (covers both fast and slow paths, including
+    // early returns). PREPARE_CALLS / PREPARE_WALL_NS are summed across
+    // all rayon threads, so the totals can exceed wall-clock time.
+    PREPARE_CALLS.fetch_add(1, Ordering::Relaxed);
+    let _prepare_wall = PrepareWallGuard {
+        start: Instant::now(),
+    };
+
     // === Phase 1: cache hit without raw-byte fetch ===
     //
     // For S3 sources the etag is the cache key directly. For Local sources
@@ -105,10 +114,12 @@ pub fn prepare_tile(
         if let Some(key) = try_cache_key_without_bytes(locator) {
             if let Some(cache_path) = cache_path_for_key(&key, crop, tile_size) {
                 if let Ok(img) = ::image::open(&cache_path) {
+                    PREPARE_FAST_HITS.fetch_add(1, Ordering::Relaxed);
                     return Ok(img.to_rgb8());
                 }
                 if try_s3_pull_key(&key, crop, tile_size, &cache_path) {
                     if let Ok(img) = ::image::open(&cache_path) {
+                        PREPARE_FAST_HITS.fetch_add(1, Ordering::Relaxed);
                         return Ok(img.to_rgb8());
                     }
                 }
@@ -152,15 +163,18 @@ pub fn prepare_tile(
     if !force {
         if let Some(cache_path) = &cache_path_opt {
             if let Ok(img) = ::image::open(cache_path) {
+                PREPARE_SLOW_HITS.fetch_add(1, Ordering::Relaxed);
                 return Ok(img.to_rgb8());
             }
             if try_s3_pull_key(&cache_key, crop, tile_size, cache_path) {
                 if let Ok(img) = ::image::open(cache_path) {
+                    PREPARE_SLOW_HITS.fetch_add(1, Ordering::Relaxed);
                     return Ok(img.to_rgb8());
                 }
             }
         }
     }
+    PREPARE_FULL_PREPS.fetch_add(1, Ordering::Relaxed);
 
     // === Full prep from raw_bytes ===
     let mut tile_img = ::image::load_from_memory(&raw_bytes)
@@ -570,6 +584,28 @@ static S3_PUT_BYTES: AtomicU64 = AtomicU64::new(0);
 static CPU_NS: AtomicU64 = AtomicU64::new(0);
 static S3_NS: AtomicU64 = AtomicU64::new(0);
 
+// Total telemetry across every prepare_tile invocation (fast + slow path).
+// PREPARE_WALL_NS is wall-time summed across all threads, so it can exceed
+// process wall-clock — that is the point: it surfaces parallel work.
+static PREPARE_CALLS: AtomicU64 = AtomicU64::new(0);
+static PREPARE_WALL_NS: AtomicU64 = AtomicU64::new(0);
+static PREPARE_FAST_HITS: AtomicU64 = AtomicU64::new(0);
+static PREPARE_SLOW_HITS: AtomicU64 = AtomicU64::new(0);
+static PREPARE_FULL_PREPS: AtomicU64 = AtomicU64::new(0);
+
+/// RAII guard accumulating prepare_tile wall time into PREPARE_WALL_NS on
+/// drop. Fires for every invocation, including early returns from the
+/// fast path.
+struct PrepareWallGuard {
+    start: Instant,
+}
+
+impl Drop for PrepareWallGuard {
+    fn drop(&mut self) {
+        PREPARE_WALL_NS.fetch_add(self.start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
+}
+
 thread_local! {
     /// Per-thread accumulator for time spent in S3 calls during the current
     /// `prepare_tile` slow-path execution. The slow path resets this on entry
@@ -616,6 +652,21 @@ pub fn phase_time_ns() -> (u64, u64) {
     (
         CPU_NS.load(Ordering::Relaxed),
         S3_NS.load(Ordering::Relaxed),
+    )
+}
+
+/// Returns `(calls, wall_ns, fast_hits, slow_hits, full_preps)` covering
+/// every `prepare_tile` invocation since process start (both fast and
+/// slow paths). `wall_ns` is summed across rayon threads; the three
+/// outcome counters add up to `calls`. Use these to attribute wall-clock
+/// gaps between scenarios to cache behaviour vs raw CPU work.
+pub fn prepare_tile_telemetry() -> (u64, u64, u64, u64, u64) {
+    (
+        PREPARE_CALLS.load(Ordering::Relaxed),
+        PREPARE_WALL_NS.load(Ordering::Relaxed),
+        PREPARE_FAST_HITS.load(Ordering::Relaxed),
+        PREPARE_SLOW_HITS.load(Ordering::Relaxed),
+        PREPARE_FULL_PREPS.load(Ordering::Relaxed),
     )
 }
 

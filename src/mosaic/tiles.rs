@@ -6,8 +6,8 @@ pub use source::{enumerate_tiles, TileLocator, TileRef, TileSource};
 pub use tile::Tile;
 pub use tileset::TileSet;
 pub use utils::{
-    flipped_coords, persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_with_date,
-    s3_put_stats,
+    flipped_coords, persist_tile_index, phase_time_ns, prepare_tile, prepare_tile_telemetry,
+    prepare_tile_with_date, s3_put_stats,
 };
 
 /// Representation type for computing distances between N-vectors
