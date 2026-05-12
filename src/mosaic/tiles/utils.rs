@@ -14,7 +14,6 @@ use image::error::LimitError;
 use image::imageops::FilterType;
 use image::DynamicImage;
 use num_integer::Roots;
-use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
 use crate::mosaic::error::ImageError;
@@ -410,16 +409,27 @@ fn warn_once_cache_write_failed(cache_dir: &Path, err: &std::io::Error) {
 // runs when the file hasn't changed. The index is purely an optimization;
 // every code path still works correctly without it.
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize, Clone, Copy)]
 struct IndexEntry {
     mtime: u64,
     size: u64,
     md5: [u8; 16],
 }
 
-type IndexMap = BTreeMap<PathBuf, IndexEntry>;
+type IndexMap = BTreeMap<String, IndexEntry>;
+type ArchivedIndexMap = rkyv::Archived<IndexMap>;
 
-static INDEX: OnceLock<RwLock<IndexMap>> = OnceLock::new();
+/// Index state: an optional read-only archive backed by an mmap of the
+/// on-disk index, plus an in-memory delta map for inserts made during this
+/// run. Lookups consult the delta first, then the archive. The mmap and
+/// archive reference are `&'static` because the index lives for the
+/// process lifetime (held inside a `OnceLock`).
+struct IndexState {
+    archive: Option<&'static ArchivedIndexMap>,
+    delta: RwLock<IndexMap>,
+}
+
+static INDEX: OnceLock<IndexState> = OnceLock::new();
 
 fn index_path() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("mosaic").join("index.bin"))
@@ -463,38 +473,57 @@ fn metadata_key(path: &Path) -> Option<(u64, u64)> {
     Some((mtime, m.len()))
 }
 
-fn get_index() -> &'static RwLock<IndexMap> {
+fn get_index() -> &'static IndexState {
     INDEX.get_or_init(|| {
-        let map = match index_path() {
-            Some(p) => match std::fs::read(&p) {
-                Ok(bytes) => bincode::deserialize::<IndexMap>(&bytes).unwrap_or_else(|_| {
+        let archive = index_path().and_then(|p| {
+            let file = std::fs::File::open(&p).ok()?;
+            // Safety: we treat the mmap as read-only for the lifetime of the
+            // process. `persist_tile_index` writes via a tmp-file + rename, so
+            // the original inode (and thus the bytes we have mapped) is never
+            // mutated in place.
+            let mmap = unsafe { memmap2::Mmap::map(&file).ok()? };
+            let mmap: &'static memmap2::Mmap = Box::leak(Box::new(mmap));
+            match rkyv::access::<ArchivedIndexMap, rkyv::rancor::Error>(&mmap[..]) {
+                Ok(a) => Some(a),
+                Err(_) => {
                     WARN_INDEX_LOAD.call_once(|| {
                         eprintln!(
-                            "⚠️  Tile index at {} could not be deserialized, starting fresh.",
+                            "⚠️  Tile index at {} could not be validated, starting fresh.",
                             p.display()
                         );
                     });
-                    IndexMap::new()
-                }),
-                Err(_) => IndexMap::new(),
-            },
-            None => IndexMap::new(),
-        };
-        RwLock::new(map)
+                    None
+                }
+            }
+        });
+        IndexState {
+            archive,
+            delta: RwLock::new(IndexMap::new()),
+        }
     })
 }
 
 fn lookup_index(path: &Path, key: &(u64, u64)) -> Option<[u8; 16]> {
-    let idx = get_index().read().ok()?;
-    idx.get(path)
-        .filter(|e| e.mtime == key.0 && e.size == key.1)
-        .map(|e| e.md5)
+    let st = get_index();
+    let path_str = path.to_string_lossy();
+    // Delta wins over the on-disk archive — it has the most recent writes
+    // for this run.
+    if let Ok(delta) = st.delta.read() {
+        if let Some(e) = delta.get(path_str.as_ref()) {
+            return (e.mtime == key.0 && e.size == key.1).then_some(e.md5);
+        }
+    }
+    let archive = st.archive?;
+    let e = archive.get(path_str.as_ref())?;
+    let mtime: u64 = e.mtime.into();
+    let size: u64 = e.size.into();
+    (mtime == key.0 && size == key.1).then_some(e.md5)
 }
 
 fn update_index(path: &Path, key: (u64, u64), md5: [u8; 16]) {
-    if let Ok(mut idx) = get_index().write() {
-        idx.insert(
-            path.to_owned(),
+    if let Ok(mut delta) = get_index().delta.write() {
+        delta.insert(
+            path.to_string_lossy().into_owned(),
             IndexEntry {
                 mtime: key.0,
                 size: key.1,
@@ -722,26 +751,59 @@ fn try_s3_push_key(key: &str, crop: bool, tile_size: u32, local_path: &Path) {
 
 /// Persist the in-memory tile index to disk. Best-effort; failures emit a
 /// one-shot warning. Call this once near process exit (after rendering).
+///
+/// Writes via a tmp-file + rename so we never mutate the bytes the existing
+/// mmap is pointing at — the new file gets a new inode, the old one stays
+/// valid until the leaked Mmap is dropped at process exit.
 pub fn persist_tile_index() {
     let p = match index_path() {
         Some(p) => p,
         None => return,
     };
-    let idx = match get_index().read() {
+    let st = get_index();
+    let delta = match st.delta.read() {
         Ok(g) => g,
         Err(_) => return,
     };
-    if idx.is_empty() {
+    // Nothing new this run AND we already have a valid on-disk archive →
+    // no point rewriting the same bytes.
+    if delta.is_empty() && st.archive.is_some() {
         return;
     }
-    let bytes = match bincode::serialize(&*idx) {
+    // Merge: start with the existing archive (skipping keys overridden by
+    // the delta), then overlay the delta.
+    let mut merged: IndexMap = BTreeMap::new();
+    if let Some(archive) = st.archive {
+        for (k, v) in archive.iter() {
+            let k_str: &str = k.as_ref();
+            if !delta.contains_key(k_str) {
+                merged.insert(
+                    k_str.to_owned(),
+                    IndexEntry {
+                        mtime: v.mtime.into(),
+                        size: v.size.into(),
+                        md5: v.md5,
+                    },
+                );
+            }
+        }
+    }
+    for (k, v) in delta.iter() {
+        merged.insert(k.clone(), *v);
+    }
+    if merged.is_empty() {
+        return;
+    }
+    let bytes = match rkyv::to_bytes::<rkyv::rancor::Error>(&merged) {
         Ok(b) => b,
         Err(_) => return,
     };
     if let Some(parent) = p.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Err(e) = std::fs::write(&p, bytes) {
+    let tmp = p.with_extension("bin.tmp");
+    if let Err(e) = std::fs::write(&tmp, &bytes[..]).and_then(|_| std::fs::rename(&tmp, &p)) {
+        let _ = std::fs::remove_file(&tmp);
         WARN_INDEX_WRITE.call_once(|| {
             eprintln!(
                 "⚠️  Could not persist tile index to {}: {}.",
@@ -863,6 +925,39 @@ mod tests {
         let tile_img = result.unwrap();
         assert_eq!(tile_img.width(), tile_size);
         assert_eq!(tile_img.height(), tile_size);
+    }
+
+    #[test]
+    fn test_index_archive_roundtrip() {
+        let mut map: IndexMap = BTreeMap::new();
+        map.insert(
+            "/some/tile/a.jpg".to_string(),
+            IndexEntry {
+                mtime: 1_700_000_000,
+                size: 4096,
+                md5: [0xab; 16],
+            },
+        );
+        map.insert(
+            "/some/tile/b.png".to_string(),
+            IndexEntry {
+                mtime: 1_700_000_999,
+                size: 8192,
+                md5: [0xcd; 16],
+            },
+        );
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&map).expect("serialize");
+        let archive =
+            rkyv::access::<ArchivedIndexMap, rkyv::rancor::Error>(&bytes[..]).expect("access");
+        let a = archive.get("/some/tile/a.jpg").expect("a present");
+        assert_eq!(u64::from(a.mtime), 1_700_000_000);
+        assert_eq!(u64::from(a.size), 4096);
+        assert_eq!(a.md5, [0xab; 16]);
+        let b = archive.get("/some/tile/b.png").expect("b present");
+        assert_eq!(u64::from(b.mtime), 1_700_000_999);
+        assert_eq!(u64::from(b.size), 8192);
+        assert_eq!(b.md5, [0xcd; 16]);
+        assert!(archive.get("/missing").is_none());
     }
 
     #[test]
