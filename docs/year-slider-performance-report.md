@@ -74,3 +74,25 @@ the global `transition: background-color 0.2 s` re-interpolated all of them.
 - Visual sanity check at year 2006: matches show through as bright "windows"; overlay
   is flush with image bottom (no extra dark strip after positioning the SVG
   `<defs>` carrier out of inline flow).
+
+## Stress test — tougher fixture
+Re-ran the benchmark on a much harder fixture to confirm the change scales:
+`marco2.jpeg` cropped at `--tile-size 32 --downsample 2 --no-repeat`,
+producing **6,305 placements across 22 years** (vs 2,220 / 20 in the primary
+fixture). Same harness, 5 runs, 60 Hz display → 22-step floor = ~733 ms.
+
+| Metric | Baseline | Final (overlay) | Δ |
+|---|---:|---:|---:|
+| Stepwise avg total | 1,285.5 ms | **751.4 ms** | **-41.5 %** |
+| Stepwise per-run | 950 / 982 / **2,555** / 943 / 997 | 752 / 750 / 751 / 753 / 751 | variance ~10× → flat |
+| Step median | 33.5 ms | 33.4 ms | — |
+| Step P95 | 112.6 ms | 44.5 ms | -60 % |
+| Step max | **1,375 ms** | **63.8 ms** | **-95.4 %** |
+| Fast scrub avg | 157.1 ms | **50.8 ms** | **-67.7 %** |
+
+What this shows: per-tile dim paint scales linearly with tile count (the 2006
+activation hitch grew from 326 ms at 2.2 k tiles to 1,375 ms at 6.3 k tiles —
+nearly a full 1.4-second visible stall). The overlay-and-mask approach stays
+within 2-3× of the rAF floor regardless of placement count, because the paint
+cost is constant: one element per step. The optimization's win grows with the
+size of the mosaic.
