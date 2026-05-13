@@ -1118,15 +1118,31 @@ function cleanupModalEvents(modal) {
 
 // Year filter functionality
 // Note: yearFilterMinYear and yearFilterMaxYear are defined in the HTML
+//
+// Architecture: a single full-cover dim overlay sits above the mosaic image
+// (z-index 4). An SVG mask (objectBoundingBox units) cuts holes at year-match
+// tile positions so the original image shows through. Per slider step we
+// rewrite the mask's <rect>s — one paint of one element — rather than
+// repainting N tile-region backgrounds. The per-tile year-match class is
+// still flipped, but only to gate pointer-events (no paint impact).
 
-// Year index for O(1) tile lookup by year - built once at initialization
-let tilesByYear = null; // Map: year string -> array of tile elements
-let currentYearMatchTiles = []; // Currently highlighted tiles (for cleanup)
+let tilesByYear = null;          // Map: year string -> array of tile elements
+let yearMaskInnerCache = null;   // Map: year string -> innerHTML for #year-mask
+let currentYearMatchTiles = [];  // Tiles currently bearing the year-match class
+
+// Cached refs and state for the hot input path
+let yearDisplayEl = null;
+let yearZoomContainerEl = null;
+let yearMaskEl = null;
+let lastAppliedYearSliderValue = null;
+let pendingYearSliderValue = null;
+let yearFilterRafHandle = 0;
 
 function buildYearIndex() {
-    if (tilesByYear !== null) return; // Already built
+    if (tilesByYear !== null) return;
 
     tilesByYear = new Map();
+    yearMaskInnerCache = new Map();
     const tiles = document.querySelectorAll('.tile-region');
 
     tiles.forEach(tile => {
@@ -1140,6 +1156,28 @@ function buildYearIndex() {
     console.log('Year index built with', tilesByYear.size, 'unique years for', tiles.length, 'tiles');
 }
 
+// Build (and cache) the inner SVG markup for the dim overlay's mask for a
+// given year. The mask is a white-fills-everything rect plus one black rect
+// per matching tile (which become transparent holes in the overlay).
+function getYearMaskInner(year) {
+    if (yearMaskInnerCache.has(year)) {
+        return yearMaskInnerCache.get(year);
+    }
+    const matches = tilesByYear.get(year) || [];
+    const parts = ['<rect x="0" y="0" width="1" height="1" fill="white"/>'];
+    for (let i = 0; i < matches.length; i++) {
+        const s = matches[i].style;
+        const x = parseFloat(s.left) / 100;
+        const y = parseFloat(s.top) / 100;
+        const w = parseFloat(s.width) / 100;
+        const h = parseFloat(s.height) / 100;
+        parts.push('<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" fill="black"/>');
+    }
+    const html = parts.join('');
+    yearMaskInnerCache.set(year, html);
+    return html;
+}
+
 function setupYearFilter() {
     const slider = document.getElementById('year-slider');
     const display = document.getElementById('year-display');
@@ -1149,56 +1187,75 @@ function setupYearFilter() {
         return;
     }
 
-    // Build year index for fast filtering
     buildYearIndex();
+
+    yearDisplayEl = display;
+    yearZoomContainerEl = document.querySelector('.zoom-container');
+    yearMaskEl = document.getElementById('year-mask');
 
     console.log('Setting up year filter with range:', yearFilterMinYear, 'to', yearFilterMaxYear);
 
-    // Set slider range: 0 = "All", 1 to N = specific years
     slider.min = '0';
     slider.max = String(yearFilterMaxYear - yearFilterMinYear + 1);
-    slider.value = '0'; // Default to "All"
+    slider.value = '0';
+    lastAppliedYearSliderValue = 0;
 
     console.log('Slider range set to 0 -', slider.max);
 
+    // Coalesce rapid input events into one update per animation frame.
+    // The slider can fire input far faster than the browser can paint;
+    // intermediate values are wasted work since only the latest one is visible.
     slider.addEventListener('input', function() {
-        const value = parseInt(this.value);
-        updateYearFilter(value);
+        pendingYearSliderValue = parseInt(this.value);
+        if (yearFilterRafHandle === 0) {
+            yearFilterRafHandle = requestAnimationFrame(flushYearFilter);
+        }
     });
 };
 
+function flushYearFilter() {
+    yearFilterRafHandle = 0;
+    const value = pendingYearSliderValue;
+    if (value === lastAppliedYearSliderValue) return;
+    lastAppliedYearSliderValue = value;
+    updateYearFilter(value);
+}
+
 function updateYearFilter(sliderValue) {
-    const display = document.getElementById('year-display');
-    const zoomContainer = document.querySelector('.zoom-container');
+    const display = yearDisplayEl;
+    const zoomContainer = yearZoomContainerEl;
 
     if (!display || !zoomContainer) {
         console.log('Display or zoom container not found for year filter');
         return;
     }
 
-    // Clear previous matches first (always fast - only touches previously matched tiles)
-    currentYearMatchTiles.forEach(tile => {
-        tile.classList.remove('year-match');
-    });
+    // Clear previous pointer-events gate (only touches previously matched tiles)
+    for (let i = 0; i < currentYearMatchTiles.length; i++) {
+        currentYearMatchTiles[i].classList.remove('year-match');
+    }
     currentYearMatchTiles = [];
 
     if (sliderValue === 0) {
-        // Show all tiles - remove filter mode
         display.textContent = 'All Years';
         zoomContainer.classList.remove('year-filter-active');
     } else {
-        // Filter by specific year
         const selectedYear = yearFilterMinYear + sliderValue - 1;
-        display.textContent = String(selectedYear);
+        const yearStr = String(selectedYear);
+        display.textContent = yearStr;
 
-        // Activate filter mode (dims all tiles via CSS)
+        // Update the overlay mask in one DOM mutation (cached per year)
+        if (yearMaskEl) {
+            yearMaskEl.innerHTML = getYearMaskInner(yearStr);
+        }
+
         zoomContainer.classList.add('year-filter-active');
 
-        // Highlight only matching tiles (fast - typically <500 tiles vs 6000+)
-        const matchingTiles = tilesByYear?.get(String(selectedYear)) || [];
-        matchingTiles.forEach(tile => {
-            tile.classList.add('year-match');
-        });
+        // Re-enable pointer-events on matching tiles only (no paint impact)
+        const matchingTiles = tilesByYear?.get(yearStr) || [];
+        for (let i = 0; i < matchingTiles.length; i++) {
+            matchingTiles[i].classList.add('year-match');
+        }
         currentYearMatchTiles = matchingTiles;
     }
 };
