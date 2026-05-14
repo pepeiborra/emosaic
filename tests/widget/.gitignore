@@ -1,0 +1,7 @@
+node_modules
+package-lock.json
+test-results
+playwright-report
+fixtures/widget.html
+fixtures/mosaic-widget.js
+fixtures/mosaic-widget.css

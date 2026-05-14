@@ -1,0 +1,14 @@
+{
+  "name": "emosaic-widget-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build-fixture": "node fixtures/build-fixture.mjs",
+    "test": "npm run build-fixture && playwright test",
+    "test:ui": "npm run build-fixture && playwright test --ui",
+    "install-browsers": "playwright install chromium webkit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
