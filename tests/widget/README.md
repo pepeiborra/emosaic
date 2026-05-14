@@ -34,10 +34,9 @@ every spec across four browser profiles in parallel:
 | `mobile-chromium` | Chromium | 412×915 (Pixel 7) | Android mobile modal |
 | `mobile-webkit` | WebKit | 393×852 (iPhone 14) | iOS mobile modal |
 
-Expected baseline on the current `master`: **14 passed / 4 failed / 10 skipped**.
-The 4 failures are Bug #1 (image cropping on both desktop projects). Skipped
-counts reflect per-project filters (e.g. desktop-only tests skip on mobile
-profiles, and vice versa).
+Expected baseline: **18 passed / 0 failed / 10 skipped**. Skipped counts
+reflect per-project filters (e.g. desktop-only tests skip on mobile profiles,
+and vice versa).
 
 For a watch-mode UI with traces and screenshots:
 
