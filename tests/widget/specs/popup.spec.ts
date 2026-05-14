@@ -20,6 +20,11 @@ test.describe('Bug #2 — clicking a tile shows a popup', () => {
       const img = document.querySelector<HTMLImageElement>('.mosaic-image');
       return !!img && img.complete && img.naturalWidth > 0;
     });
+    // Match image-visibility.spec.ts: let the widget's load-time init
+    // (adjustMosaicLayout, initializeMobileZoom, etc.) settle before
+    // synthesising taps/clicks.
+    await page.waitForLoadState('load');
+    await page.waitForTimeout(800);
     // Sanity: tiles must be present and clickable.
     const tileCount = await page.evaluate(
       () => document.querySelectorAll('.tile-region').length

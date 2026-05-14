@@ -8,7 +8,10 @@ export default defineConfig({
   timeout: 30_000,
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  // Retry on CI, and also when targeting a deployed URL — those runs are
+  // subject to network jitter that can drop synthetic clicks before the
+  // page is ready. Local file:// runs are deterministic; no retries there.
+  retries: process.env.CI || process.env.EMOSAIC_FIXTURE_URL ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
     trace: 'retain-on-failure',

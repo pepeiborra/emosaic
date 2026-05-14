@@ -18,9 +18,11 @@ mkdirSync(out, { recursive: true });
 copyFileSync(join(repoRoot, 'src/assets/mosaic-widget.js'), join(out, 'mosaic-widget.js'));
 copyFileSync(join(repoRoot, 'src/assets/mosaic-widget.css'), join(out, 'mosaic-widget.css'));
 
-// A 4x3 grid of tile regions across 3 years, on a 400x300 background image.
-// The background is a base64-encoded 400x300 solid-color JPEG (tiny).
-const W = 400, H = 300, COLS = 4, ROWS = 3;
+// Portrait dimensions deliberately chosen to be taller than a typical
+// desktop viewport (e.g. 1280×720) once scaled to viewport width — this
+// reproduces the production cropping bug locally. Real prod image is
+// 6272×8832 (~1.4 H/W); we use the same aspect at smaller scale.
+const W = 627, H = 883, COLS = 4, ROWS = 3;
 const tileW = (100 / COLS).toFixed(4);
 const tileH = (100 / ROWS).toFixed(4);
 
