@@ -412,16 +412,23 @@ where
         html.push_str(&format!(
             r#"
             <!-- Single full-cover dim overlay for the year filter.
-                 The SVG mask cuts holes at year-match tile positions, so per-step
-                 we just rewrite the mask's <rect>s instead of dimming N tile-regions. -->
-            <svg id="year-mask-svg" width="0" height="0" aria-hidden="true">
+                 The inline SVG <mask> cuts holes at year-match tile positions;
+                 per slider step we just rewrite the mask's <rect>s instead of
+                 dimming N tile-regions. Uses SVG-attribute masking (mask=
+                 "url(#id)") rather than CSS mask-image because WebKit/Safari
+                 does not resolve CSS mask-image: url(#id) to an in-document
+                 <mask> element. -->
+            <svg id="year-dim-overlay" class="year-dim-overlay"
+                 preserveAspectRatio="none" aria-hidden="true">
                 <defs>
                     <mask id="year-mask" maskUnits="objectBoundingBox" maskContentUnits="objectBoundingBox">
                         <rect x="0" y="0" width="1" height="1" fill="white"/>
                     </mask>
                 </defs>
+                <rect x="0" y="0" width="100%" height="100%"
+                      fill="black" fill-opacity="0.7"
+                      mask="url(#year-mask)"/>
             </svg>
-            <div id="year-dim-overlay" class="year-dim-overlay" aria-hidden="true"></div>
             </div>
         </div>
 

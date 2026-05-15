@@ -457,29 +457,23 @@ body {
     z-index: 5;
 }
 
-/* Year filter dim is a single full-cover overlay element. An SVG mask cuts
-   holes at year-match tile positions, so per slider step we only repaint one
-   element instead of N tile-regions. At 2k+ tiles this drops scrub paint from
-   ~150 ms to ~16 ms. */
+/* Year filter dim is a single inline <svg> overlay. The SVG <mask> cuts
+   holes at year-match tile positions, so per slider step we only rewrite the
+   mask's <rect>s and paint one element instead of N tile-regions. At 2k+
+   tiles this drops scrub paint from ~150 ms to ~16 ms.
+
+   The dim fill and the mask reference live on the SVG <rect> via the SVG
+   `mask` attribute, not on the wrapping element via CSS `mask-image`. WebKit/
+   Safari does not resolve CSS `mask-image: url(#fragment)` to an in-document
+   <mask> element, but SVG-attribute masking works correctly. */
 .year-dim-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.7);
+    width: 100%;
+    height: 100%;
     pointer-events: none;
     z-index: 4;
     display: none;
-    mask-image: url(#year-mask);
-    -webkit-mask-image: url(#year-mask);
-}
-/* The mask SVG holds only <defs>; take it out of the inline flow so it does
-   not give the zoom-container a baseline-aligned line box (which would push
-   the container taller than the image). */
-#year-mask-svg {
-    position: absolute;
-    width: 0;
-    height: 0;
-    overflow: hidden;
-    pointer-events: none;
 }
 .zoom-container.year-filter-active .year-dim-overlay {
     display: block;
