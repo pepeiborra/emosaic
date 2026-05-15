@@ -42,6 +42,42 @@ test.describe('Bug #3 — tooltip appears on hover', () => {
     ).toEqual({ opacity: '1', visibility: 'visible' });
   });
 
+  test('desktop: revealed tooltip actually paints (compositor visibility, not just JS)', async ({ page }, testInfo) => {
+    test.skip(isMobileProject(testInfo.project.name), 'desktop only');
+
+    // The opacity/visibility/getBoundingClientRect checks above pass even
+    // when `contain: paint` on .tile-region silently clips the tooltip's
+    // pixels to the tile's ~11px box. document.elementFromPoint, in
+    // contrast, asks the compositor what's actually paintable at the
+    // point — if the tooltip's pixels are clipped, elementFromPoint
+    // returns the underlying tile-region (or its sibling) instead of
+    // the tooltip or its descendants.
+    const tile = page.locator('.tile-region').nth(0);
+    await tile.hover();
+    await page.waitForTimeout(150); // let positionTooltipSmartly settle
+    const hit = await tile.evaluate(t => {
+      const tooltip = (t as HTMLElement).querySelector<HTMLElement>('.tooltip')!;
+      const r = tooltip.getBoundingClientRect();
+      const cx = Math.round(r.left + r.width / 2);
+      const cy = Math.round(r.top + r.height / 2);
+      const el = document.elementFromPoint(cx, cy);
+      const inTooltip = el === tooltip || (el && tooltip.contains(el));
+      return {
+        tooltipRect: { x: r.x, y: r.y, w: r.width, h: r.height },
+        hitPoint: { cx, cy },
+        hitElement: el ? `${el.tagName.toLowerCase()}.${el.className || '(no class)'}` : 'null',
+        inTooltip,
+      };
+    });
+    expect(
+      hit.inTooltip,
+      `elementFromPoint(${hit.hitPoint.cx}, ${hit.hitPoint.cy}) returned ${hit.hitElement} ` +
+      `instead of the tooltip or a descendant — tooltip is JS-visible but ` +
+      `compositor-clipped (likely contain:paint on an ancestor with smaller box). ` +
+      `Tooltip rect: ${JSON.stringify(hit.tooltipRect)}`,
+    ).toBe(true);
+  });
+
   test('desktop: hovered tile loads its preview image (loadTooltipImage runs)', async ({ page }, testInfo) => {
     test.skip(isMobileProject(testInfo.project.name), 'desktop only');
 

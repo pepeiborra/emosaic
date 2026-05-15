@@ -61,10 +61,17 @@ body {
     position: absolute;
     cursor: pointer;
     transition: opacity 0.15s ease, background-color 0.2s ease, border 0.2s ease;
-    /* Tells the browser each tile's paint/layout/style is self-contained,
-       so flipping a class on one tile doesn't dirty its siblings' style
-       resolution. Meaningful at 2k+ tile counts. */
-    contain: layout style paint;
+    /* Tells the browser each tile's layout/style is self-contained, so
+       flipping a class on one tile doesn't dirty its siblings' style
+       resolution. Meaningful at 2k+ tile counts.
+
+       Do NOT add `paint` here: tile-regions host an absolutely-positioned
+       child `.tooltip` that is intentionally larger than the tile and
+       positioned outside the tile's border box. `contain: paint` would
+       clip the tooltip's pixels to the tile — the popup still measures
+       as visible in JS (computed styles, getBoundingClientRect) but the
+       compositor drops every pixel that's not inside the ~11px tile. */
+    contain: layout style;
 }
 .tile-region:active {
     transform: scale(0.95);
