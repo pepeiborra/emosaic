@@ -20,7 +20,10 @@ S3_BUCKET ?= casadelmanco.com
 # from here. Distinct from S3_BUCKET (tile images, served under /mosaics/,
 # /tiles/, /uploads/). Static pages like /privacy.html live here.
 ROOT_BUCKET ?= emosaic-admin-prod
-DISTRIBUTION_ID ?= E2KW8FQIKWXD1D
+# Single source of truth: SSM parameter written by aws-backend/deploy-cloud.sh.
+# Fallback to the historical literal if SSM is unreachable (no creds, first run
+# before deploy-cloud.sh has ever populated it, etc).
+DISTRIBUTION_ID ?= $(shell aws ssm get-parameter --name /emosaic/prod/main-cloudfront-id --query 'Parameter.Value' --output text 2>/dev/null || echo E2KW8FQIKWXD1D)
 TITLE ?= Casa del Manco
 TIMESTAMP := $(shell date +%Y%m%d%H%M%S)
 DOWNSAMPLE=1

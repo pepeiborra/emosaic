@@ -211,11 +211,15 @@ Outputs:
     Export:
       Name: !Sub '${Environment}-emosaic-admin-cloudfront-url'
 
+  # Note: no cross-stack Export here on purpose. The customer-facing distribution
+  # ID lives in SSM (/emosaic/${Environment}/main-cloudfront-id), written by
+  # deploy-cloud.sh and consumed by job-handler + phase3-enhancements via
+  # {{resolve:ssm:...}}. The Output is kept so deploy-admin-ui.sh can still
+  # discover the stack-managed admin-UI distribution (the secondary staging-URL
+  # invalidation target in prod, the primary CDN in non-prod custom-domain envs).
   CloudFrontDistributionId:
-    Description: CloudFront distribution ID
+    Description: Admin-UI CloudFront distribution ID (stack-managed; staging URL in prod, primary in non-prod)
     Value: !Ref AdminUIDistribution
-    Export:
-      Name: !Sub '${Environment}-emosaic-admin-cloudfront-id'
 
   CustomDomainURL:
     Condition: HasCustomDomain

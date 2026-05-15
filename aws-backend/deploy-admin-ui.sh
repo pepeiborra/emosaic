@@ -74,15 +74,20 @@ aws s3 sync dist/ s3://${ADMIN_BUCKET}/admin/ \
 
 # Determine CloudFront distribution(s) to invalidate.
 # The emosaic-admin-prod S3 bucket is served by TWO CloudFront distributions in prod:
-#   - E2KW8FQIKWXD1D — the main casadelmanco.com distribution (what real users hit at /admin/)
+#   - The customer-facing one (alias casadelmanco.com; ID kept in SSM at
+#     /emosaic/${ENVIRONMENT}/main-cloudfront-id, written by deploy-cloud.sh)
 #   - The one exported by ${ENVIRONMENT}-admin-ui (the raw djceloluh236z.cloudfront.net staging URL)
 # Both need invalidation or users keep seeing cached old code.
 # For non-prod environments, only the stack-specific distribution exists / matters.
+MAIN_CDN_FALLBACK="E2KW8FQIKWXD1D"
+MAIN_CDN_FROM_SSM=$(aws ssm get-parameter --name "/emosaic/${ENVIRONMENT}/main-cloudfront-id" --query 'Parameter.Value' --output text --region $REGION 2>/dev/null || echo "")
+MAIN_CDN_ID="${MAIN_CDN_FROM_SSM:-$MAIN_CDN_FALLBACK}"
+
 if [ -z "$DISTRIBUTION_ID" ]; then
     STACK_CF_ID=$(aws cloudformation describe-stacks --stack-name $STACK_ADMIN_UI --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text --region $REGION 2>/dev/null || echo "")
 
     if [ "$ENVIRONMENT" = "prod" ]; then
-        DISTRIBUTION_ID="E2KW8FQIKWXD1D"
+        DISTRIBUTION_ID="$MAIN_CDN_ID"
         ADMIN_URL="https://casadelmanco.com/admin/"
         if [ -n "$STACK_CF_ID" ] && [ "$STACK_CF_ID" != "None" ]; then
             EXTRA_DISTRIBUTION_ID="$STACK_CF_ID"
@@ -95,7 +100,7 @@ if [ -z "$DISTRIBUTION_ID" ]; then
         fi
         ADMIN_URL="${ADMIN_URL}/admin/"
     else
-        DISTRIBUTION_ID="E2KW8FQIKWXD1D"
+        DISTRIBUTION_ID="$MAIN_CDN_ID"
         ADMIN_URL="https://casadelmanco.com/admin/"
     fi
 fi

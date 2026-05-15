@@ -34,8 +34,7 @@ Resources:
           S3_BUCKET: !ImportValue
             Fn::Sub: '${Environment}-emosaic-tiles-bucket'
           ADMIN_BUCKET: !Sub 'emosaic-admin-${Environment}'
-          CLOUDFRONT_DISTRIBUTION_ID: !ImportValue
-            Fn::Sub: '${Environment}-emosaic-admin-cloudfront-id'
+          CLOUDFRONT_DISTRIBUTION_ID: !Sub '{{resolve:ssm:/emosaic/${Environment}/main-cloudfront-id}}'
       Timeout: 60
 
   # Permission for EventBridge to invoke Lambda

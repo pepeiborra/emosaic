@@ -701,6 +701,31 @@ else
     rm -f /tmp/tiles-bucket-policy-${ENVIRONMENT}.json
 fi
 
+# Publish the customer-facing CloudFront distribution ID to SSM so the
+# job-completion and set-main-mosaic Lambdas can invalidate the right CDN via
+# {{resolve:ssm:/emosaic/${env}/main-cloudfront-id}}.
+#
+# Two cases:
+#   - No CUSTOM_DOMAIN (prod today): casadelmanco.com is served by a
+#     hand-managed distribution (default E2KW8FQIKWXD1D) — NOT the stack-managed
+#     admin-UI one. Use ${MAIN_DISTRIBUTION_ID:-E2KW8FQIKWXD1D}.
+#   - CUSTOM_DOMAIN (rc.casadelmanco.com etc.): the stack-managed admin-UI
+#     distribution IS the customer-facing one. Use $ADMIN_DISTRIBUTION_ID (the
+#     same value computed at line ~672 from the stack output).
+if [ -z "$CUSTOM_DOMAIN" ]; then
+    CUSTOMER_FACING_CDN_ID="${MAIN_DISTRIBUTION_ID:-E2KW8FQIKWXD1D}"
+else
+    CUSTOMER_FACING_CDN_ID="$ADMIN_DISTRIBUTION_ID"
+fi
+aws ssm put-parameter \
+    --name "/emosaic/${ENVIRONMENT}/main-cloudfront-id" \
+    --value "$CUSTOMER_FACING_CDN_ID" \
+    --type String \
+    --overwrite \
+    --description "Customer-facing CloudFront distribution ID; consumed by job_completed + set_main_mosaic Lambdas via {{resolve:ssm:...}}." \
+    --region $REGION >/dev/null
+echo "✅ SSM parameter /emosaic/${ENVIRONMENT}/main-cloudfront-id set to $CUSTOMER_FACING_CDN_ID"
+
 # Only add /admin/* route to main CloudFront for prod (when no custom domain)
 # Environments with CUSTOM_DOMAIN have their own CloudFront distribution
 if [ -z "$CUSTOM_DOMAIN" ]; then
