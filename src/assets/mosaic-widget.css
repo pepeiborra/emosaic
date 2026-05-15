@@ -41,8 +41,14 @@ body {
    Resolves against the viewport because the image's containing block
    (.zoom-container) has no definite size — percentage maxes against an
    indefinite parent are ignored and the image renders natural-sized,
-   overflowing the flex-centered .mosaic-container. */
-@media (min-width: 769px) and (hover: hover) {
+   overflowing the flex-centered .mosaic-container.
+
+   Gate on (hover: hover) only — NOT on a viewport-width threshold.
+   Narrow desktop windows (sidebar splits, vertical layouts) are still
+   desktop and still need the image scaled to fit; a min-width gate
+   leaves the image at natural size and pushes tiles far off-screen,
+   which silently breaks hover tooltips on those layouts. */
+@media (hover: hover) {
     .mosaic-image {
         max-width: 100vw;
         max-height: 100vh;
