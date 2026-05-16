@@ -44,6 +44,7 @@ Parameters:
 
 Conditions:
   CreateBucket: !Equals [!Ref UseExistingBucket, 'false']
+  HasFederatedAuth: !Equals [!Ref Environment, 'prod']
 
 Resources:
   #############################################################################
@@ -376,9 +377,6 @@ Resources:
 
   AdminUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
-    # Federated providers must exist before the client lists them.
-    DependsOn:
-      - GoogleIdentityProvider
     Properties:
       ClientName: !Sub '${Environment}-emosaic-admin-client'
       UserPoolId: !Ref AdminUserPool
@@ -395,22 +393,31 @@ Resources:
         AccessToken: hours
         IdToken: hours
         RefreshToken: days
-      SupportedIdentityProviders:
-        - COGNITO
-        - Google
-      CallbackURLs:
-        - https://casadelmanco.com/admin/callback
-        - http://localhost:5173/callback
-      LogoutURLs:
-        - https://casadelmanco.com/admin
-        - http://localhost:5173
-      AllowedOAuthFlows:
-        - code
-      AllowedOAuthScopes:
-        - openid
-        - email
-        - profile
-      AllowedOAuthFlowsUserPoolClient: true
+      # !Ref GoogleIdentityProvider returns the provider name "Google" AND
+      # creates the implicit CFN dependency that the old explicit DependsOn enforced.
+      SupportedIdentityProviders: !If
+        - HasFederatedAuth
+        - [COGNITO, !Ref GoogleIdentityProvider]
+        - [COGNITO]
+      CallbackURLs: !If
+        - HasFederatedAuth
+        - - https://casadelmanco.com/admin/callback
+          - http://localhost:5173/callback
+        - !Ref AWS::NoValue
+      LogoutURLs: !If
+        - HasFederatedAuth
+        - - https://casadelmanco.com/admin
+          - http://localhost:5173
+        - !Ref AWS::NoValue
+      AllowedOAuthFlows: !If
+        - HasFederatedAuth
+        - [code]
+        - !Ref AWS::NoValue
+      AllowedOAuthScopes: !If
+        - HasFederatedAuth
+        - [openid, email, profile]
+        - !Ref AWS::NoValue
+      AllowedOAuthFlowsUserPoolClient: !If [HasFederatedAuth, true, false]
 
   # Create initial admin user
   AdminUser:
@@ -432,12 +439,14 @@ Resources:
 
   AdminUserPoolDomain:
     Type: AWS::Cognito::UserPoolDomain
+    Condition: HasFederatedAuth
     Properties:
       UserPoolId: !Ref AdminUserPool
       Domain: !Sub '${CognitoDomainPrefix}-${Environment}'
 
   GoogleIdentityProvider:
     Type: AWS::Cognito::UserPoolIdentityProvider
+    Condition: HasFederatedAuth
     Properties:
       UserPoolId: !Ref AdminUserPool
       ProviderName: Google
@@ -786,6 +795,7 @@ Outputs:
       Name: !Sub '${Environment}-post-confirmation-function'
 
   CognitoDomain:
+    Condition: HasFederatedAuth
     Description: Cognito hosted UI domain (use this in OAuth provider redirect URIs and frontend Amplify config)
     Value: !Sub '${CognitoDomainPrefix}-${Environment}.auth.${AWS::Region}.amazoncognito.com'
     Export:
