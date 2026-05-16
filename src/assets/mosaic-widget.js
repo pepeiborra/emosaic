@@ -222,61 +222,18 @@ function applyTransform(smooth = false) {
     }
 }
 
-// Position year filter at bottom-right of visible image (used on mobile)
+// Year filter positioning. On mobile the filter is anchored to the viewport
+// via CSS (position: fixed, bottom/right), so it stays put while panning and
+// zooming. This function only clears any legacy inline positioning that the
+// previous image-tracking implementation may have left on the element.
 function positionYearFilter() {
     const yearFilter = document.querySelector('.year-filter-container.image-positioned');
-    const image = document.querySelector('.mosaic-image');
-    const container = document.querySelector('.mosaic-container');
-
-    if (!yearFilter || !image || !container) {
-        console.log('Year filter positioning skipped - missing elements');
+    if (!yearFilter) {
         return;
     }
-
-    if (!isMobile()) {
-        return;
-    }
-
-    // Wait for image to be fully loaded and rendered
-    if (image.naturalWidth === 0 || image.naturalHeight === 0) {
-        console.log('Year filter positioning skipped - image not loaded');
-        setTimeout(() => positionYearFilter(), POSITIONING_RETRY_DELAY);
-        return;
-    }
-
-    // Get the actual rendered position and size of the image
-    const imageRect = image.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-
-    // Ensure we have valid dimensions
-    if (imageRect.width === 0 || imageRect.height === 0 ||
-        containerRect.width === 0 || containerRect.height === 0) {
-        console.log('Year filter positioning skipped - invalid dimensions');
-        setTimeout(() => positionYearFilter(), POSITIONING_RETRY_DELAY);
-        return;
-    }
-
-    // Calculate position relative to container (mobile only)
-    const rightOffset = 10; // pixels from right edge of image
-    const bottomOffset = 10; // pixels from bottom edge of image
-
-    // Position at bottom-right of the visible image
-    const left = (imageRect.right - containerRect.left) - yearFilter.offsetWidth - rightOffset;
-    const top = (imageRect.bottom - containerRect.top) - yearFilter.offsetHeight - bottomOffset;
-
-    yearFilter.style.left = Math.max(0, left) + 'px';
-    yearFilter.style.top = Math.max(0, top) + 'px';
-
-    // Check if year filter would be outside the visible screen area
-    const yearFilterRect = yearFilter.getBoundingClientRect();
-    const screenWidth = window.innerWidth;
-    const screenHeight = window.innerHeight;
-
-    // Hide if completely outside screen bounds
-    if (yearFilterRect.right < 0 || yearFilterRect.left > screenWidth ||
-        yearFilterRect.bottom < 0 || yearFilterRect.top > screenHeight) {
-        yearFilter.style.display = 'none';
-    } else {
+    if (yearFilter.style.left || yearFilter.style.top || yearFilter.style.display === 'none') {
+        yearFilter.style.left = '';
+        yearFilter.style.top = '';
         yearFilter.style.display = '';
     }
 }
