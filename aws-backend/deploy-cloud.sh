@@ -285,6 +285,43 @@ rm -f custom_message.zip pre_signup.zip post_confirmation.zip
 
 echo ""
 echo "====================================================================="
+echo "Phase 2b: Pre-flight — ensure SSM /emosaic/${ENVIRONMENT}/main-cloudfront-id exists"
+echo "====================================================================="
+echo ""
+# job-handler.yaml (Phase 3) and phase3-enhancements.yaml (Phase 7) resolve
+# {{resolve:ssm:/emosaic/${env}/main-cloudfront-id}} at deploy time, so the
+# param must exist BEFORE Phase 3 runs. The canonical write happens later in
+# Phase 9 with the real value (admin-ui stack output for custom-domain envs,
+# or $MAIN_DISTRIBUTION_ID for prod), but on a first-time deploy that's too
+# late. This pre-flight uses whatever's available now — existing SSM value if
+# any, else admin-ui output if the stack exists, else the prod hand-managed
+# fallback as a sentinel. Phase 9 will overwrite with the canonical value.
+EXISTING_CDN_ID=$(aws ssm get-parameter --name "/emosaic/${ENVIRONMENT}/main-cloudfront-id" --query 'Parameter.Value' --output text --region $REGION 2>/dev/null || echo "")
+if [ -n "$EXISTING_CDN_ID" ]; then
+    echo "✅ SSM param already set ($EXISTING_CDN_ID) — leaving in place (Phase 9 may overwrite)"
+else
+    if [ -n "$CUSTOM_DOMAIN" ]; then
+        PREFLIGHT_CDN_ID=$(aws cloudformation describe-stacks --stack-name $STACK_ADMIN_UI --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text --region $REGION 2>/dev/null || echo "")
+    else
+        PREFLIGHT_CDN_ID=""
+    fi
+    if [ -z "$PREFLIGHT_CDN_ID" ] || [ "$PREFLIGHT_CDN_ID" = "None" ]; then
+        PREFLIGHT_CDN_ID="${MAIN_DISTRIBUTION_ID:-E2KW8FQIKWXD1D}"
+        echo "⚠️  admin-ui stack output not available — seeding SSM with sentinel $PREFLIGHT_CDN_ID (Phase 9 will overwrite)"
+    else
+        echo "📌 Seeding SSM from $STACK_ADMIN_UI output: $PREFLIGHT_CDN_ID"
+    fi
+    aws ssm put-parameter \
+        --name "/emosaic/${ENVIRONMENT}/main-cloudfront-id" \
+        --value "$PREFLIGHT_CDN_ID" \
+        --type String \
+        --description "Customer-facing CloudFront distribution ID; consumed by job_completed + set_main_mosaic Lambdas via {{resolve:ssm:...}}. Pre-flight seed; overwritten in Phase 9." \
+        --region $REGION >/dev/null
+    echo "✅ SSM param /emosaic/${ENVIRONMENT}/main-cloudfront-id seeded"
+fi
+
+echo ""
+echo "====================================================================="
 echo "Phase 3: Deploying Job Handler (EventBridge + Lambda)"
 echo "====================================================================="
 echo ""
