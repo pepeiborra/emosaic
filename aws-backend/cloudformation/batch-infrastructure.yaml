@@ -353,12 +353,6 @@ Outputs:
     Export:
       Name: !Sub '${Environment}-emosaic-job-queue-name'
 
-  BatchJobDefinitionArn:
-    Description: ARN of the Batch job definition
-    Value: !Ref BatchJobDefinition
-    Export:
-      Name: !Sub '${Environment}-emosaic-job-definition-arn'
-
   BatchLogGroupName:
     Description: Name of the CloudWatch Logs group
     Value: !Ref BatchLogGroup

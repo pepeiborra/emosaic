@@ -37,8 +37,12 @@ The template references `{{resolve:secretsmanager:${OAuthSecretName}:SecretStrin
 
 ### Outstanding / not deployed
 
-- `worktree-rc-skip-federated-idp` branch with the federation-skip template patch + SSM-ordering fix — local only, not yet merged into `master` or pushed. Merging it into master is safe for prod (prod's `HasFederatedAuth: !Equals [!Ref Environment, 'prod']` evaluates true, so all existing federated resources stay; the SSM pre-flight is idempotent and a no-op when the param already exists).
+- `worktree-rc-skip-federated-idp` branch with three commits — local only, not yet merged into `master` or pushed:
+  1. federation-skip template patch (prod's `HasFederatedAuth` evaluates true, so all existing federated resources stay);
+  2. SSM-ordering fix in `deploy-cloud.sh` (idempotent pre-flight at Phase 2b);
+  3. dead-export removal in `batch-infrastructure.yaml` (no current consumers across any env).
 - `deploy-cloud.sh` SSM-ordering bug FIXED in this branch (new "Phase 2b: Pre-flight" block at line ~288). On a fresh env it seeds the SSM param from the admin-ui stack output (if it exists) or the prod hand-managed fallback `E2KW8FQIKWXD1D` as a sentinel; Phase 9's existing canonical write overwrites with the right value. Idempotent: if the param already exists, the pre-flight skips.
+- Stale `${env}-emosaic-job-definition-arn` export REMOVED from `batch-infrastructure.yaml`. The export was deadweight since commit `7b16cf5` (mosaic-api was changed to compute the JobDefinition name directly via `!Sub`), but the template still emitted it — meaning every revision bump changed the export value, and any deployed env with an old mosaic-api still importing would block the batch update. Verified via `aws cloudformation list-imports` that zero stacks in any env still import it. Applied to RC (retired the export) — `prod-batch-infrastructure` still has the export; user can apply the same template to prod when ready (metadata-only change, no resource churn).
 - RC mosaics still serve the OLD index.html at the root (`Last-Modified: Thu, 01 Jan 2026`) — that's the auto-generated main-mosaic page from the last RC job. It'll refresh next time someone runs `set_main_mosaic` on RC.
 
 ---
