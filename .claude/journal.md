@@ -1,5 +1,36 @@
 # Journal
 
+## 2026-05-16 (RC) — Skip-tile-cache opt-in for mosaic regen
+
+User reported mini-tiles in the rendered mosaic occasionally not matching the source tile they're linked to, suspected stale prepared-tile cache. Added an opt-in **skip_cache** flag, per-job (not stored on the mosaic record).
+
+**Commit** (branch `worktree-skip-tile-cache`, 1 commit, not yet pushed)
+- `59fb414` feat(mosaic): per-job skip-cache flag to bypass prepared-tile cache
+
+Plumbing: admin-ui checkbox (CreateMosaic + MosaicDetail) → `submitJob({skip_cache})` → `submit_job` Lambda forwards `SKIP_CACHE` env var → `entrypoint.sh` appends `--force` to the `emosaic mosaic` subcommand. The existing Rust `--force` flag bypasses the prepared-tile cache (see `src/mosaic/tiles/utils.rs:86` — "When force is true, the on-disk cache entry is bypassed (but still overwritten with the freshly-prepared image)"). No persistent field on the mosaic record — the next regen defaults back to cache-enabled.
+
+**Deploys** (all `rc-`, eu-west-3, profile `admin`)
+- `aws lambda update-function-code` on `rc-submit-job` → SHA256 `BVHtUt7FNALA2dfsG6rIVlqsNSAl55jQo7ta53eRCtU=` ✅ (out-of-band of CFN, since the change is code-only)
+- Admin UI built with `.env.rc`, synced to `s3://emosaic-admin-rc/admin/` (new bundle `index-CSmnj8nS.js`), invalidated on `EXVVFJHH92DIP` (`I3PHWO3R6BPQGXPK3FF220UTUR`).
+- ECR `rc-emosaic:latest` → digest `sha256:925865b651818c30c3ec1426850fb5260dae2598ae5beaf00f4fede0d8822a24`, 39/39 cargo tests passed pre-push. Batch JobDefinition pins to `:latest` tag (no revision bump needed).
+
+### Things learnt
+
+**Bash `cd` persists across tool calls.** A `cd aws-backend/lambda/mosaic && zip ...` for the Lambda packaging step changed the session's cwd, and the very next `./aws-backend/deploy-admin-ui.sh` failed with "no such file or directory" because the relative path was now wrong. The fix was to prepend `cd /path/to/worktree` to the next command — but the cleaner pattern for one-off `cd`s is to use `(cd dir && cmd)` in a subshell, or compose into a single chained command. The harness reminders are explicit ("Try to maintain your current working directory throughout the session by using absolute paths"); worth heeding.
+
+**Code-only Lambda changes don't need a full `deploy-cloud.sh`.** Direct `aws lambda update-function-code --zip-file fileb://...` is seconds, not minutes. The CFN template's lambda code source gets re-applied on the next `deploy-cloud.sh` run, which will deploy this same submit_job.py with the same SHA — idempotent. This is the right escape hatch for fast iteration during testing.
+
+### Verification needed
+
+Not yet exercised: end-to-end test that ticking the "Skip tile cache" checkbox actually produces a mosaic where the mini-tiles match their links. Recipe: open https://rc.casadelmanco.com/admin/, log in, open an existing RC mosaic, tick "Skip tile cache" next to Regenerate, click Regenerate, wait for job to complete, open mosaic_widget.html, click a few tiles whose mini doesn't visually match the linked source, confirm new render fixes it. If the regression reappears even with skip_cache on, the bug is upstream of the prepared-tile cache (analysis cache `.emosaic_*`, tile preparation logic, or rendering itself) and `--force` is the wrong lever.
+
+### Outstanding / not deployed
+
+- Branch `worktree-skip-tile-cache` — local only, not yet merged or pushed.
+- Prod deploy pending verification on RC.
+
+---
+
 ## 2026-05-16 (RC) — Full RC deployment + skip federated IdP on non-prod
 
 **Commits** (branch `worktree-rc-skip-federated-idp`)
