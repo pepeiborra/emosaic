@@ -166,6 +166,8 @@ export const es: Translations = {
     // Checkboxes
     noRepeat: 'Sin teselas repetidas (usa algoritmo hungaro)',
     cropTiles: 'Recortar teselas a cuadrado (en lugar de redimensionar)',
+    skipCache: 'Omitir cache de teselas (volver a preparar todas)',
+    skipCacheHelp: 'Ignora la cache de teselas preparadas. Util si las mini-teselas del mosaico no coinciden con la tesela enlazada.',
 
     // Tile folders
     tileFolders: 'Carpetas de teselas',
@@ -213,6 +215,7 @@ export const es: Translations = {
     setAsMain: 'Establecer como principal',
     setting: 'Estableciendo...',
     regenerate: 'Regenerar',
+    skipCacheLabel: 'Omitir cache de teselas',
     starting: 'Iniciando...',
     viewFullSize: 'Ver tamano completo',
     openMosaicViewer: 'Abrir visor de mosaico',

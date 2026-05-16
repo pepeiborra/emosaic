@@ -279,6 +279,7 @@ export function MosaicDetail() {
   const queryClient = useQueryClient();
   const t = useTranslation();
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [skipCache, setSkipCache] = useState(false);
 
   const { data: mosaic, isLoading, error } = useQuery({
     queryKey: ['mosaic', id],
@@ -308,7 +309,7 @@ export function MosaicDetail() {
   });
 
   const regenerateMutation = useMutation({
-    mutationFn: () => submitJob(id!, mosaic?.is_main ?? false),
+    mutationFn: () => submitJob(id!, mosaic?.is_main ?? false, skipCache),
     onSuccess: (job) => {
       navigate(`/job/${job.id}`);
     },
@@ -374,13 +375,25 @@ export function MosaicDetail() {
             {setMainMutation.isPending ? t.mosaicDetail.setting : t.mosaicDetail.setAsMain}
           </button>
         )}
-        <button
-          onClick={() => regenerateMutation.mutate()}
-          disabled={regenerateMutation.isPending || mosaic.status === 'processing'}
-          className="px-4 py-2 text-sm font-medium text-indigo-600 bg-white border border-indigo-600 rounded-md hover:bg-indigo-50 disabled:opacity-50"
-        >
-          {regenerateMutation.isPending ? t.mosaicDetail.starting : t.mosaicDetail.regenerate}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => regenerateMutation.mutate()}
+            disabled={regenerateMutation.isPending || mosaic.status === 'processing'}
+            className="px-4 py-2 text-sm font-medium text-indigo-600 bg-white border border-indigo-600 rounded-md hover:bg-indigo-50 disabled:opacity-50"
+          >
+            {regenerateMutation.isPending ? t.mosaicDetail.starting : t.mosaicDetail.regenerate}
+          </button>
+          <label className="flex items-center text-sm text-gray-700" title={t.createMosaic.skipCacheHelp}>
+            <input
+              type="checkbox"
+              checked={skipCache}
+              onChange={(e) => setSkipCache(e.target.checked)}
+              disabled={regenerateMutation.isPending || mosaic.status === 'processing'}
+              className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span className="ml-2">{t.mosaicDetail.skipCacheLabel}</span>
+          </label>
+        </div>
         {mosaic.status === 'completed' && mosaicUrl && (
           <a
             href={mosaicUrl}

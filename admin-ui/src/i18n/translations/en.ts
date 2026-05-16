@@ -164,6 +164,8 @@ export const en = {
     // Checkboxes
     noRepeat: 'No repeat tiles (uses Hungarian algorithm)',
     cropTiles: 'Crop tiles to square (instead of resize)',
+    skipCache: 'Skip tile cache (re-prepare all tiles)',
+    skipCacheHelp: 'Bypass the prepared-tile cache. Use if mini-tiles in the mosaic do not match their linked source tile.',
 
     // Tile folders
     tileFolders: 'Tile Folders',
@@ -211,6 +213,7 @@ export const en = {
     setAsMain: 'Set as Main',
     setting: 'Setting...',
     regenerate: 'Regenerate',
+    skipCacheLabel: 'Skip tile cache',
     starting: 'Starting...',
     viewFullSize: 'View Full Size',
     openMosaicViewer: 'Open Mosaic Viewer',

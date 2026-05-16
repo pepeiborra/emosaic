@@ -56,6 +56,7 @@ CROP="${CROP:-false}"
 RANDOMIZE="${RANDOMIZE:-0}"
 DOWNSAMPLE="${DOWNSAMPLE:-1}"
 EXCLUDED_FOLDERS="${EXCLUDED_FOLDERS:-}"
+SKIP_CACHE="${SKIP_CACHE:-false}"
 
 echo ""
 echo "=== Configuration ==="
@@ -71,6 +72,7 @@ echo "Crop: $CROP"
 echo "Randomize: $RANDOMIZE"
 echo "Downsample: $DOWNSAMPLE"
 echo "Excluded Folders: $EXCLUDED_FOLDERS"
+echo "Skip Cache: $SKIP_CACHE"
 
 # Step 1: Download source image
 echo ""
@@ -150,6 +152,10 @@ CMD_ARGS+=(
 # Add subcommand optional flags
 if [ "$NO_REPEAT" = "true" ]; then
     CMD_ARGS+=("--no-repeat")
+fi
+
+if [ "$SKIP_CACHE" = "true" ]; then
+    CMD_ARGS+=("--force")
 fi
 
 if [ "$RANDOMIZE" != "0" ]; then

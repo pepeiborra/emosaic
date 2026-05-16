@@ -499,6 +499,7 @@ export function CreateMosaic() {
     excluded_folders: [],
   });
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  const [skipCache, setSkipCache] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   // Fetch tile folders
@@ -677,7 +678,7 @@ export function CreateMosaic() {
         setUploadProgress(t.createMosaic.startingJob);
         let job;
         try {
-          job = await submitJob(mosaic.id);
+          job = await submitJob(mosaic.id, false, skipCache);
         } catch (err) {
           await errorLogger.logStepError(
             'submit_job',
@@ -1004,6 +1005,23 @@ export function CreateMosaic() {
             <label htmlFor="crop" className="ml-2 block text-sm text-gray-700">
               {t.createMosaic.cropTiles}
             </label>
+          </div>
+          <div>
+            <div className="flex items-center">
+              <input
+                id="skip-cache"
+                type="checkbox"
+                checked={skipCache}
+                onChange={(e) => setSkipCache(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <label htmlFor="skip-cache" className="ml-2 block text-sm text-gray-700">
+                {t.createMosaic.skipCache}
+              </label>
+            </div>
+            <p className="mt-1 ml-6 text-xs text-gray-500">
+              {t.createMosaic.skipCacheHelp}
+            </p>
           </div>
         </div>
 

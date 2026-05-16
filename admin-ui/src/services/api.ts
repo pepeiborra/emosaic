@@ -91,10 +91,14 @@ export async function setMainMosaic(id: string): Promise<Mosaic> {
 }
 
 // Job endpoints
-export async function submitJob(mosaicId: string, setMain = false): Promise<Job> {
+export async function submitJob(
+  mosaicId: string,
+  setMain = false,
+  skipCache = false,
+): Promise<Job> {
   return apiRequest('/jobs', {
     method: 'POST',
-    body: JSON.stringify({ mosaic_id: mosaicId, set_main: setMain }),
+    body: JSON.stringify({ mosaic_id: mosaicId, set_main: setMain, skip_cache: skipCache }),
   });
 }
 

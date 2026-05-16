@@ -66,6 +66,7 @@ def lambda_handler(event, context):
 
         mosaic_id = body['mosaic_id']
         set_main = body.get('set_main', False)
+        skip_cache = bool(body.get('skip_cache', False))
 
         # Get mosaic details from DynamoDB
         mosaic_response = mosaics_table.get_item(Key={'id': mosaic_id})
@@ -142,7 +143,8 @@ def lambda_handler(event, context):
                     {'name': 'CROP', 'value': crop},
                     {'name': 'RANDOMIZE', 'value': randomize},
                     {'name': 'DOWNSAMPLE', 'value': downsample},
-                    {'name': 'EXCLUDED_FOLDERS', 'value': excluded_folders_str}
+                    {'name': 'EXCLUDED_FOLDERS', 'value': excluded_folders_str},
+                    {'name': 'SKIP_CACHE', 'value': 'true' if skip_cache else 'false'}
                 ]
             }
         )
